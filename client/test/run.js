@@ -461,6 +461,101 @@ async function lineTests() {
 }
 
 // ---------------------------------------------------------------------------
+// multistate + international
+// ---------------------------------------------------------------------------
+
+async function geographyTests() {
+  console.log('\nmultistate + international');
+
+  await test('a missing state fails loudly instead of silently becoming Florida', () => {
+    const r = makeRisk({
+      product: { formType: 'HO3', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'X' },
+      property: { address: { line1: '1 Main St', postalCode: '75001' }, yearBuilt: 2005, constructionType: 'FRAME' },
+      coverages: { covA: 400000 },
+    });
+    assert.notStrictEqual(r.property.address.state, 'FL', 'state silently defaulted');
+    assert.ok(validateRisk(r).some((p) => p.includes('state is required')));
+  });
+
+  await test('a single-state agency can opt in: makeRisk(partial, { defaultState })', () => {
+    const r = makeRisk({
+      product: { formType: 'HO3', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'X' },
+      property: { address: { line1: '1 Main St', postalCode: '75001' }, yearBuilt: 2005, constructionType: 'FRAME' },
+      coverages: { covA: 400000 },
+    }, { defaultState: 'TX' });
+    assert.strictEqual(r.property.address.state, 'TX');
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('a fake state code (XX) is rejected - real membership, not "any two letters"', () => {
+    const r = goodRisk();
+    r.property.address.state = 'XX';
+    assert.ok(validateRisk(r).some((p) => p.includes('valid US state')));
+  });
+
+  await test('a Canadian HO risk validates: province region, local postal format', () => {
+    const r = makeRisk({
+      country: 'CA',
+      product: { formType: 'HO3', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Tremblay' },
+      property: {
+        address: { line1: '12 Rue Principale', city: 'Montreal', state: 'QC', postalCode: 'H2X 1Y4' },
+        yearBuilt: 1998, constructionType: 'MASONRY',
+      },
+      coverages: { covA: 600000 },
+    });
+    assert.strictEqual(r.country, 'CA');
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('LIFE quotes internationally: Ontario as the rating jurisdiction', () => {
+    const r = makeRisk({
+      country: 'CA',
+      product: { lineOfBusiness: 'LIFE', formType: 'TERM', effectiveDate: '2026-10-01', termMonths: 240 },
+      applicant: { lastName: 'Singh', dateOfBirth: '1985-04-12' },
+      coverages: { faceAmount: 750000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'ON' },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('HEALTH refuses non-US explicitly - ACA/Medicare are US products by law', () => {
+    const r = makeRisk({
+      country: 'DE',
+      product: { lineOfBusiness: 'HEALTH', formType: 'ACA', effectiveDate: '2026-11-01' },
+      applicant: { lastName: 'X' },
+      location: { zip: '34102' },
+      members: [{ relationship: 'PRIMARY', dateOfBirth: '1980-01-01', tobaccoUse: false }],
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('US-only')));
+  });
+
+  await test('an unassigned country code (ZZ) is rejected', () => {
+    const r = goodRisk();
+    r.country = 'ZZ';
+    assert.ok(validateRisk(r).some((p) => p.includes('ISO 3166-1')));
+  });
+
+  await test('COMMERCIAL multistate: locations[] premises are validated per entry', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'COMMERCIAL', formType: 'BOP', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Roofing LLC' },
+      property: { address: { line1: '2 Trade St', state: 'FL', postalCode: '34104' } },
+      locations: [
+        { address: { line1: '9 Branch Rd', state: 'GA', postalCode: '30301' }, payroll: 200000 },
+        { address: { line1: '4 Bad Rd', state: 'XX' } },
+      ],
+      coverages: { glOccurrence: 1000000 },
+    });
+    const problems = validateRisk(r);
+    assert.ok(problems.some((p) => p.startsWith('locations.1')), 'bad second location not caught');
+    assert.ok(!problems.some((p) => p.startsWith('locations.0')), 'good first location wrongly flagged');
+  });
+}
+
+// ---------------------------------------------------------------------------
 // mapping - the "adaptable to any carrier" machinery
 // ---------------------------------------------------------------------------
 
@@ -684,6 +779,7 @@ async function e2eTests() {
   await redactionTests();
   await contractTests();
   await lineTests();
+  await geographyTests();
   await mappingTests();
   await transportTests();
   await e2eTests();

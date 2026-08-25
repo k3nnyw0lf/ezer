@@ -142,6 +142,14 @@ are mainstream), UL/IUL are excluded until a single canonical premium semantics 
 HEALTH request without a `planId` obliges the engine to return its lowest-premium qualifying plan
 and say so in `messages`, so two implementations can never return incomparable numbers.
 
+**Any state, and international.** There is deliberately no default state — a missing state fails
+loudly instead of silently becoming the author's home state, state codes validate against the real
+50+DC+territories list, and single-state agencies opt in with `makeRisk(risk, { defaultState: 'TX' })`.
+`country` (ISO 3166-1, default `US`) makes the address rules country-appropriate: non-US postal
+codes follow local formats, state fields carry region codes (`QC`, `ON`, `NSW`), commercial risks
+take multistate `locations[]`, and US-only products (ACA, Medicare) refuse non-US explicitly rather
+than failing strangely.
+
 Adding a kind of insurance is a declaration, not a fork:
 
 ```js

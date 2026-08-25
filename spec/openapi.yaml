@@ -224,6 +224,14 @@ components:
         requestId:
           type: string
           description: Agency-generated idempotency and tracing key. Echo it back.
+        country:
+          type: string
+          description: |
+            ISO 3166-1 alpha-2, default US. US risks keep exact state/ZIP validation;
+            elsewhere postal codes follow local formats, state fields carry 1-3 char
+            region codes (e.g. QC, ON, NSW), and US-only products (HEALTH ACA/Medicare)
+            refuse non-US explicitly. premium.currency in the response already travels.
+          example: US
         agency:
           type: object
           properties:

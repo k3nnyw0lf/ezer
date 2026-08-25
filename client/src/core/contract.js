@@ -33,8 +33,59 @@ function present(v) {
 }
 
 const IS_DATE = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
-const IS_STATE = (v) => /^[A-Z]{2}$/.test(String(v));
+// All 50 states + DC + the territories where these lines are actually sold.
+// "Any two capital letters" would validate XX and quietly break multistate routing.
+const US_STATES = new Set(('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO '
+  + 'MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR VI GU AS MP').split(' '));
+const IS_STATE = (v) => US_STATES.has(String(v));
 const IS_ZIP = (v) => /^\d{5}(-\d{4})?$/.test(String(v));
+// ISO 3166-1 alpha-2. risk.country defaults to US; any other assigned code makes
+// the address rules country-appropriate instead of forcing ZIPs on the world.
+const ISO_COUNTRIES = new Set(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ '
+  + 'CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR '
+  + 'GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP '
+  + 'KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ '
+  + 'NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW '
+  + 'SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ '
+  + 'UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW').split(' '));
+const IS_COUNTRY = (v) => ISO_COUNTRIES.has(String(v));
+const countryOf = (risk) => String(risk.country || 'US').toUpperCase();
+
+/**
+ * Country-aware address validation. US addresses keep exact state/ZIP rules;
+ * everywhere else, postal codes follow local formats (validated for sanity,
+ * not shape) and state/region is optional. Message paths stay identical to
+ * the US-only era so existing callers' error handling does not change.
+ */
+function addressProblems(risk, base, opts = {}) {
+  const problems = [];
+  const addr = get(risk, base) || {};
+  if (opts.line1 && !present(addr.line1)) problems.push(base + '.line1 is required');
+  if (countryOf(risk) === 'US') {
+    if (!present(addr.state)) problems.push(base + '.state is required');
+    else if (!IS_STATE(addr.state)) problems.push(base + '.state must be a valid US state/territory code');
+    if (!present(addr.postalCode)) problems.push(base + '.postalCode is required');
+    else if (!IS_ZIP(addr.postalCode)) problems.push(base + '.postalCode must be a US ZIP');
+  } else {
+    if (!present(addr.postalCode)) problems.push(base + '.postalCode is required');
+    else if (String(addr.postalCode).length > 10) problems.push(base + '.postalCode must be 10 characters or fewer');
+    if (present(addr.state) && !/^[A-Za-z0-9]{1,3}$/.test(String(addr.state))) {
+      problems.push(base + '.state must be a 1-3 character region code outside the US');
+    }
+  }
+  return problems;
+}
+
+/** For scalar state fields (rating/filing jurisdiction). Required in every country. */
+function stateOrRegionProblem(risk, path, label) {
+  const v = get(risk, path);
+  const suffix = label ? ' (' + label + ')' : '';
+  if (countryOf(risk) === 'US') {
+    return IS_STATE(v) ? null : path + ' must be a valid US state/territory code' + suffix;
+  }
+  return present(v) && /^[A-Za-z0-9]{1,3}$/.test(String(v)) ? null
+    : path + ' must be a 1-3 character region code' + suffix;
+}
 const IS_POSITIVE = (v) => Number(v) > 0;
 const IS_YEAR = (v) => Number(v) > 1800 && Number(v) <= new Date().getUTCFullYear() + 1;
 
@@ -64,20 +115,18 @@ registerLine('HO', {
   formTypes: FORM_TYPES,
   required: [
     ['applicant.lastName'],
-    ['property.address.line1'],
-    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
-    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP'],
     ['property.yearBuilt', IS_YEAR, 'is out of range'],
     ['property.constructionType', (v) => CONSTRUCTION.includes(v), `must be one of ${CONSTRUCTION.join(', ')}`],
     ['coverages.covA', IS_POSITIVE, 'must be a positive number'],
   ],
+  validate: (risk) => addressProblems(risk, 'property.address', { line1: true }),
   skeleton: (p) => ({
     property: {
       occupancy: 'OWNER',
       usage: 'PRIMARY',
       priorClaims: [],
       ...(p.property || {}),
-      address: { state: 'FL', ...((p.property || {}).address || {}) },
+      address: { ...((p.property || {}).address || {}) },
     },
   }),
 });
@@ -88,13 +137,10 @@ registerLine('FLOOD', {
   formTypes: null,
   required: [
     ['applicant.lastName'],
-    ['property.address.line1'],
-    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
-    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP'],
     ['property.yearBuilt', IS_YEAR, 'is out of range'],
   ],
   validate: (risk) => {
-    const problems = [];
+    const problems = addressProblems(risk, 'property.address', { line1: true });
     if (!present(get(risk, 'coverages.building')) && !present(get(risk, 'coverages.contents'))) {
       problems.push('coverages.building or coverages.contents is required for FLOOD');
     }
@@ -105,7 +151,7 @@ registerLine('FLOOD', {
       occupancy: 'OWNER',
       usage: 'PRIMARY',
       ...(p.property || {}),
-      address: { state: 'FL', ...((p.property || {}).address || {}) },
+      address: { ...((p.property || {}).address || {}) },
     },
     // Flood-specific facts private carriers actually rate on. All optional.
     // { zone, elevationCertificate, lowestFloorElevationFeet, baseFloodElevationFeet,
@@ -118,12 +164,9 @@ registerLine('FLOOD', {
 registerLine('AUTO', {
   label: 'Personal Auto',
   formTypes: null,
-  required: [
-    ['property.address.state', IS_STATE, 'must be a 2-letter state code (garaging state)'],
-    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP (garaging ZIP)'],
-  ],
+  required: [],
   validate: (risk) => {
-    const problems = [];
+    const problems = addressProblems(risk, 'property.address'); // garaging address
     const vehicles = risk.vehicles || [];
     const drivers = risk.drivers || [];
     if (!vehicles.length) problems.push('vehicles must contain at least one vehicle');
@@ -142,7 +185,7 @@ registerLine('AUTO', {
     return problems;
   },
   skeleton: (p) => ({
-    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    property: { ...(p.property || {}), address: { ...((p.property || {}).address || {}) } },
     // [{ vin | year+make+model, use: 'COMMUTE', annualMiles, comprehensiveDeductible, collisionDeductible }]
     vehicles: [...(p.vehicles || [])],
     // [{ firstName, lastName, dateOfBirth, licenseNumber, licenseState, incidents: [] }]
@@ -157,10 +200,11 @@ registerLine('COMMERCIAL', {
   required: [
     ['product.formType', undefined, 'is required (e.g. BOP, GL, WC)'],
     ['business.name'],
-    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
   ],
   validate: (risk) => {
     const problems = [];
+    const premisesProblem = stateOrRegionProblem(risk, 'property.address.state', 'primary premises');
+    if (premisesProblem) problems.push(premisesProblem);
     const ft = String(get(risk, 'product.formType') || '').toUpperCase();
     if (ft === 'WC' && !present(get(risk, 'business.payroll'))) {
       problems.push('business.payroll is required for WC');
@@ -168,10 +212,19 @@ registerLine('COMMERCIAL', {
     if ((ft === 'BOP' || ft === 'PROP') && !present(get(risk, 'property.address.line1'))) {
       problems.push('property.address.line1 is required for premises-based forms');
     }
+    // Multistate / multi-country: additional premises beyond property.address.
+    (risk.locations || []).forEach((loc, i) => {
+      const st = get(loc, 'address.state');
+      const ok = countryOf(risk) === 'US' ? IS_STATE(st) : (present(st) && /^[A-Za-z0-9]{1,3}$/.test(String(st)));
+      if (!ok) problems.push(`locations.${i}.address.state must be a valid state/region code`);
+    });
     return problems;
   },
   skeleton: (p) => ({
-    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    property: { ...(p.property || {}), address: { ...((p.property || {}).address || {}) } },
+    // Multistate premises: [{ address, payroll, employees, bpp }] - WC payroll and
+    // BOP property split by state/location live here; property.address is the primary.
+    locations: [...(p.locations || [])],
     // What commercial carriers actually rate on. classCode is the carrier's or NAICS.
     business: {
       // name, dba, fein, entityType, description, classCode, naics,
@@ -191,6 +244,9 @@ registerLine('TRAVEL', {
   ],
   validate: (risk) => {
     const problems = [];
+    if (present(get(risk, 'trip.destinationCountry')) && !IS_COUNTRY(get(risk, 'trip.destinationCountry'))) {
+      problems.push('trip.destinationCountry must be an ISO 3166-1 alpha-2 code');
+    }
     const travelers = risk.travelers || [];
     if (!travelers.length) problems.push('travelers must contain at least one traveler');
     travelers.forEach((t, i) => {
@@ -226,6 +282,10 @@ registerLine('HEALTH', {
   ],
   validate: (risk) => {
     const problems = [];
+    // ACA, Medicare, STM, and US dental/vision networks are US products by law.
+    if (countryOf(risk) !== 'US') {
+      problems.push('HEALTH formTypes are US-only products - country must be US or omitted');
+    }
     const ft = String(get(risk, 'product.formType') || '').toUpperCase();
     const members = risk.members || [];
 
@@ -320,10 +380,11 @@ registerLine('LIFE', {
     ['coverages.faceAmount', (v) => Number.isInteger(v) && v >= 1000, 'must be a whole-dollar integer >= 1000'],
     ['life.sex', (v) => ['MALE', 'FEMALE'].includes(v), 'must be MALE or FEMALE (as rated by mortality tables; unisex states handled engine-side)'],
     ['life.tobaccoUse', (v) => typeof v === 'boolean', 'must be a boolean'],
-    ['life.state', IS_STATE, 'must be a 2-letter state code'],
   ],
   validate: (risk) => {
     const problems = [];
+    const stProblem = stateOrRegionProblem(risk, 'life.state', 'rating/issue jurisdiction');
+    if (stProblem) problems.push(stProblem);
     const ft = String(get(risk, 'product.formType') || '').toUpperCase();
     const eff = get(risk, 'product.effectiveDate');
     const dob = get(risk, 'applicant.dateOfBirth');
@@ -406,10 +467,11 @@ registerLine('SURETY', {
   formTypes: ['LICENSE_PERMIT', 'BID', 'PERFORMANCE', 'PAYMENT', 'COURT', 'FIDELITY'],
   required: [
     ['bond.bondType', undefined, 'is required (registry slug, e.g. contractorLicense, notaryPublic, appeal)'],
-    ['bond.state', IS_STATE, 'must be a 2-letter state code (filing jurisdiction)'],
   ],
   validate: (risk) => {
     const problems = [];
+    const stProblem = stateOrRegionProblem(risk, 'bond.state', 'filing jurisdiction');
+    if (stProblem) problems.push(stProblem);
     const ft = String(get(risk, 'product.formType') || '').toUpperCase();
     const bond = risk.bond || {};
 
@@ -478,7 +540,6 @@ registerLine('UMBRELLA', {
     ['applicant.dateOfBirth', IS_DATE, 'must be YYYY-MM-DD'],
     ['coverages.limit', (v) => Number.isInteger(v) && v >= 1_000_000 && v % 1_000_000 === 0,
       'must be a positive multiple of 1000000'],
-    ['umbrella.riskState', IS_STATE, 'must be a 2-letter state code'],
   ],
   validate: (risk) => {
     const problems = [];
@@ -486,6 +547,8 @@ registerLine('UMBRELLA', {
     if (!['PERSONAL_UMBRELLA', 'EXCESS'].includes(ft)) {
       problems.push('product.formType must be PERSONAL_UMBRELLA or EXCESS');
     }
+    const stProblem = stateOrRegionProblem(risk, 'umbrella.riskState', 'rating jurisdiction');
+    if (stProblem) problems.push(stProblem);
 
     const underlying = risk.underlying || [];
     const TYPES = ['AUTO', 'HOME', 'CONDO', 'RENTERS', 'LANDLORD', 'WATERCRAFT', 'MOTORCYCLE', 'RV'];
@@ -563,7 +626,9 @@ registerLine('RECREATIONAL', {
       if (!IS_YEAR(u.year) || Number(u.year) < 1950) problems.push(`units.${i}.year must be 1950..current+1`);
       if (!present(u.make)) problems.push(`units.${i}.make is required`);
       if (!present(u.model)) problems.push(`units.${i}.model is required`);
-      if (!IS_ZIP(u.garagingZip)) problems.push(`units.${i}.garagingZip must be a US ZIP`);
+      const zipOk = countryOf(risk) === 'US' ? IS_ZIP(u.garagingZip)
+        : (present(u.garagingZip) && String(u.garagingZip).length <= 10);
+      if (!zipOk) problems.push(`units.${i}.garagingZip must be a valid postal code`);
 
       // The sub-block must agree with unitType - a GOLF_CART carrying a
       // motorcycle{} block is nonsense that must not validate.
@@ -685,7 +750,7 @@ registerLine('HOME_WARRANTY', {
     return problems;
   },
   skeleton: (p) => ({
-    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    property: { ...(p.property || {}), address: { ...((p.property || {}).address || {}) } },
     // { transactionType, planTier, squareFootageBand }
     warranty: { ...(p.warranty || {}) },
   }),
@@ -707,6 +772,9 @@ function validateRisk(risk) {
   }
 
   // Universal requirements.
+  if (present(risk.country) && !IS_COUNTRY(risk.country)) {
+    problems.push('country must be an ISO 3166-1 alpha-2 code (defaults to US when omitted)');
+  }
   if (!present(get(risk, 'product.effectiveDate'))) problems.push('product.effectiveDate is required');
   else if (!IS_DATE(get(risk, 'product.effectiveDate'))) problems.push('product.effectiveDate must be YYYY-MM-DD');
 
@@ -737,13 +805,24 @@ function validateRisk(risk) {
   return problems;
 }
 
-/** Build a canonical risk with line-appropriate defaults. */
-function makeRisk(partial = {}) {
+/**
+ * Build a canonical risk with line-appropriate defaults.
+ *
+ * There is deliberately NO default state: state selects rate filings, forms and
+ * eligibility, so a missing state must fail validation loudly rather than
+ * silently become the author's home state. A single-state agency may opt in with
+ * makeRisk(partial, { defaultState: 'TX' }), which fills property.address.state
+ * only when absent.
+ */
+function makeRisk(partial = {}, opts = {}) {
   const lob = String((partial.product || {}).lineOfBusiness || 'HO').toUpperCase();
   const line = LINES[lob] || LINES.HO;
 
-  return {
+  const out = {
     requestId: partial.requestId,
+    // ISO 3166-1 alpha-2. The contract was born in the US market but nothing in
+    // the response shape is US-specific; premium.currency already travels.
+    country: String(partial.country || 'US').toUpperCase(),
     agency: { ...(partial.agency || {}) },
     product: { lineOfBusiness: lob, termMonths: 12, ...(partial.product || {}) },
     applicant: { ...(partial.applicant || {}) },
@@ -768,6 +847,11 @@ function makeRisk(partial = {}) {
 
     creditConsent: partial.creditConsent ?? false,
   };
+
+  if (opts.defaultState && out.property && out.property.address && !present(out.property.address.state)) {
+    out.property.address.state = opts.defaultState;
+  }
+  return out;
 }
 
 // --------------------------------------------------------------------------
