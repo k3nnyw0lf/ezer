@@ -190,6 +190,20 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs both fine; no CLA, no cer
 Early and honest about it. The contract runs end to end against the reference carrier, the client
 passes its suite, and no carrier has yet adopted it. That is the point of publishing.
 
+## Author
+
+**Kenneth Wolf** — Owner & Principal Agent, **Wolf Surety Inc dba Wolf Insurance**, Naples, Florida.
+
+EZer is written and maintained by a practicing, licensed independent insurance agent — not a
+software vendor. The line definitions, required fields, and design decisions come from an agency
+that quotes and writes these products daily:
+
+- Florida insurance agent license **W774471** (FL DFS)
+- Agency license **L115998** · National Producer Number **20187300**
+- Home warranty license class 0251
+
+Contact: ken@wolfsurety.com · [wolfsurety.com](https://www.wolfsurety.com)
+
 ## Licence
 
-MIT. Use it, fork it, ship it in your own stack.
+MIT © Wolf Surety Inc. Use it, fork it, ship it in your own stack.
