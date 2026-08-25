@@ -9,7 +9,8 @@
 ## The proposal
 
 Let one appointed agency call the rating service you already run, using an agency-scoped credential,
-for quoting only. No bind. Capped volume. Reversible at any time by revoking one credential.
+for quoting, with binding authorised by a licensed producer. Capped volume. Reversible at any time by
+revoking one credential.
 
 ## Why this is smaller than it sounds
 
@@ -35,7 +36,7 @@ That is agency-scoped API access. It is in production today. The only thing this
 | "We would need per-agency credentials" | You already issue them. We already hold ours. |
 | "We would need entitlement logic" | Already there — it gates what the rater can quote for us today. |
 | "We would need per-agency metering" | Already there, or rater reconciliation would not work. |
-| "This is a big security change" | The credential is **less** privileged than the rater's. One agency, quote only, no bind. |
+| "This is a big security change" | The credential is **less** privileged than the rater's: one agency, and binding requires a named licensee per policy. |
 | "The rater is a vetted partner, an agency is not" | The rater is presenting **our** credential, not its own. We are asking to present the credential we already hold, ourselves. Nothing new is trusted. |
 
 ## What is genuinely new work
@@ -54,7 +55,7 @@ Everything else — schema, auth, entitlements, metering — already exists.
 |---|---|
 | Agencies | 1 (Wolf Insurance) |
 | Lines | Homeowners, Florida only |
-| Operations | Quote only. **No bind, no endorsement, no payment.** |
+| Operations | Quote, plus bind **authorised by a licensed producer, one policy at a time**. No endorsement, no payment, no unattended binding. |
 | Volume | Tens of quotes per month. We will self-throttle to any ceiling you set. |
 | Credential | Agency-scoped, revocable by you at any time, no notice required |
 | Schema | **Yours.** We conform to what your rater already receives, ACORD XML included. |

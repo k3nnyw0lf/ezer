@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { request } = require('./http');
 const { bucketFor } = require('./ratelimit');
 const { AuthError, ValidationError, QuoteClientError } = require('./errors');
-const { validateRisk } = require('./contract');
+const { validateRisk, validateBind } = require('./contract');
 
 /**
  * Declarative adapter factory.
@@ -316,6 +316,115 @@ function defineAdapter(def) {
         premium: out.premium?.annual,
         messageCount: out.messages.length,
         durationMs: res.durationMs,
+      });
+
+      return out;
+    },
+
+    /**
+     * Bind a quote. Authorised by a licensed human, never by a schedule.
+     *
+     * Deliberate design choices:
+     *   - An adapter without a `bind` block CANNOT bind. Granting quote access
+     *     never implicitly grants bind access.
+     *   - The authorisation is validated BEFORE the carrier is called, so a stale
+     *     or unsigned authorisation costs nothing and reaches nobody.
+     *   - Retries are disabled. http.js retries transport failures, which is right
+     *     for a quote and wrong for a bind: a request that may have succeeded must
+     *     not be replayed. The idempotencyKey is the carrier-side backstop; not
+     *     retrying is ours.
+     *   - There is no bindAll(). See contract.js.
+     */
+    async bind(bindRequest, { secretStore, logger, requestId = crypto.randomUUID(), overrides = {} } = {}) {
+      const carrier = def.id;
+      const log = logger?.child ? logger.child({ carrier, requestId }) : logger;
+
+      if (!def.bind) {
+        throw new QuoteClientError(
+          `Carrier ${carrier} is configured for quoting only - no bind block is defined for this adapter.`,
+          { carrier, requestId, code: 'BIND_NOT_CONFIGURED' },
+        );
+      }
+
+      // 1. Validate the human authorisation before anything leaves the process.
+      const problems = validateBind(bindRequest);
+      if (problems.length) {
+        throw new ValidationError(
+          `Bind refused for ${carrier}: authorisation is not valid.`,
+          { fields: problems, carrier, requestId },
+        );
+      }
+
+      const config = { ...(def.config || {}), ...overrides };
+      if (!config.baseUrl) {
+        throw new QuoteClientError(`No baseUrl configured for carrier ${carrier}.`, { carrier, requestId });
+      }
+
+      const secrets = def.secrets ? await secretStore.resolve(def.secrets) : {};
+      await bucketFor(carrier, def.limits).take();
+      const auth = await authenticate(def, { secrets, config, logger: log, requestId });
+
+      const b = def.bind;
+      const mapCtx = { secrets, config, bind: bindRequest, token: auth.token, requestId };
+
+      const path = template(b.path || '/bind', mapCtx);
+      const url = new URL(path.startsWith('http') ? path : `${config.baseUrl}${path}`);
+      for (const [k, v] of Object.entries({ ...(applyMapping(b.query || {}, bindRequest, mapCtx) || {}), ...auth.query })) {
+        if (v !== undefined && v !== null) url.searchParams.set(k, template(String(v), mapCtx));
+      }
+
+      const declaredHeaders = applyMapping(b.headers || {}, bindRequest, mapCtx) || {};
+      const headers = {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        // Surfaced as a header too, so a carrier can enforce idempotency at the
+        // edge without parsing the body.
+        'idempotency-key': String(bindRequest.idempotencyKey),
+        ...Object.fromEntries(Object.entries(declaredHeaders).map(([k, v]) => [k, template(String(v), mapCtx)])),
+        ...auth.headers,
+      };
+
+      const bodyObj = applyMapping(b.body || ((r) => r), bindRequest, mapCtx);
+
+      log?.info('bind authorised, calling carrier', {
+        quoteId: bindRequest.quoteId,
+        authorizedByLicense: bindRequest.authorizedBy?.licenseNumber,
+        idempotencyKey: bindRequest.idempotencyKey,
+      });
+
+      const res = await request(url.toString(), {
+        method: b.method || 'POST',
+        headers,
+        body: bodyObj === undefined ? undefined : JSON.stringify(bodyObj),
+        carrier,
+        requestId,
+        logger: log,
+        allowInsecure: config.allowInsecure,
+        timeoutMs: config.timeoutMs,
+        retries: 0, // never replay a bind
+      });
+
+      const parsed = typeof def.parseBind === 'function'
+        ? def.parseBind(res, { bind: bindRequest, requestId, carrier })
+        : applyMapping(def.parseBind || {}, res.json || {}, { res, bind: bindRequest, requestId });
+
+      const out = {
+        requestId,
+        carrier,
+        carrierLabel: def.label || def.id,
+        quoteId: bindRequest.quoteId,
+        httpStatus: res.status,
+        durationMs: res.durationMs,
+        authorizedBy: bindRequest.authorizedBy,
+        ...parsed,
+      };
+      if (!Array.isArray(out.messages)) out.messages = [];
+      if (!out.status) out.status = out.policyNumber ? 'bound' : 'referred';
+
+      log?.info('bind complete', {
+        status: out.status,
+        policyNumber: out.policyNumber,
+        messageCount: out.messages.length,
       });
 
       return out;

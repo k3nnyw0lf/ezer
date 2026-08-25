@@ -7,7 +7,10 @@ const path = require('node:path');
 const { defineAdapter } = require('./core/adapter');
 const { SecretStore, envProvider, supabaseProvider } = require('./core/secrets');
 const { createLogger } = require('./core/logger');
-const { makeRisk, validateRisk, rank, isBindable, actionableMessages } = require('./core/contract');
+const {
+  makeRisk, validateRisk, rank, isBindable, actionableMessages,
+  makeBind, validateBind, isBound,
+} = require('./core/contract');
 const redactModule = require('./core/redact');
 const errors = require('./core/errors');
 const builtIn = require('./adapters');
@@ -90,6 +93,29 @@ function createClient({
     },
 
     /**
+     * Bind ONE quote with ONE carrier, authorised by a licensed human.
+     *
+     * There is deliberately no bindAll(). Quoting fans out across carriers because
+     * comparing is the point; binding does not, because a policy is a legal
+     * obligation and a client's money. The absence of the plural is the control -
+     * a caller who wants to bind ten policies has to authorise ten times, which is
+     * exactly the intended friction.
+     *
+     *   const bindReq = makeBind(quote.quoteId, {
+     *     licenseNumber: 'W774471', name: 'Kenneth Wolf',
+     *   });
+     *   const policy = await client.bind('slide', bindReq);
+     */
+    async bind(carrierId, bindRequest, opts = {}) {
+      const adapter = registry.get(carrierId);
+      if (!adapter) throw new errors.QuoteClientError(`No adapter registered for "${carrierId}".`);
+      if (typeof adapter.bind !== 'function') {
+        throw new errors.QuoteClientError(`Adapter "${carrierId}" does not support bind.`);
+      }
+      return adapter.bind(bindRequest, { secretStore: store, logger: log, ...opts });
+    },
+
+    /**
      * Quote every registered carrier concurrently.
      *
      * A carrier that throws does NOT abort the run - it comes back as an error entry, because a
@@ -133,6 +159,9 @@ module.exports = {
   rank,
   isBindable,
   actionableMessages,
+  makeBind,
+  validateBind,
+  isBound,
   SecretStore,
   envProvider,
   supabaseProvider,

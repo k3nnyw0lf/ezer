@@ -39,8 +39,8 @@ function record(name, level, ok, detail) {
   if (detail) console.log(`        ${detail}`);
 }
 
-async function call(path, { method = 'POST', body, auth } = {}) {
-  const headers = { 'content-type': 'application/json', accept: 'application/json' };
+async function call(path, { method = 'POST', body, auth, headers: extraHeaders } = {}) {
+  const headers = { 'content-type': 'application/json', accept: 'application/json', ...(extraHeaders || {}) };
   if (auth) headers.authorization = `Bearer ${auth}`;
   let res;
   try {
@@ -293,8 +293,114 @@ async function run() {
   );
 
   await multiLineChecks();
+  await bindChecks(token, q.quoteId);
 
   return finish();
+}
+
+// ---------------------------------------------------------------------------
+// bind - authorised by a licensed human, never by a schedule
+// ---------------------------------------------------------------------------
+
+/**
+ * These checks are SKIPPED ENTIRELY if the carrier has no /bind endpoint.
+ * A quote-only carrier is a perfectly conformant carrier, and failing it for
+ * declining to expose binding would be dishonest.
+ *
+ * Where bind DOES exist, the checks verify one thing: that binding cannot
+ * happen without a licensed human, recently, exactly once.
+ */
+async function bindChecks(token, quoteId) {
+  const licensee = {
+    licenseNumber: process.env.LICENSE_NUMBER || 'W774471',
+    name: process.env.LICENSE_NAME || 'Kenneth Wolf',
+    authorizedAt: new Date().toISOString(),
+  };
+  const key = `conformance-bind-${Date.now()}`;
+
+  const probe = await call('/bind', {
+    body: { quoteId, idempotencyKey: key, authorizedBy: licensee },
+    auth: token,
+    headers: { 'idempotency-key': key },
+  });
+
+  if (probe.networkError || probe.status === 404 || probe.status === 405) {
+    console.log('\n  ----  bind not offered by this carrier, skipping bind checks  ----');
+    console.log('        (quote-only is a valid, conformant implementation)');
+    return;
+  }
+
+  console.log('');
+
+  record(
+    'Bind returns a policy number for a valid, freshly authorised request',
+    'REQUIRED',
+    probe.status === 200 && probe.json && probe.json.policyNumber,
+    probe.status === 200
+      ? `policyNumber=${probe.json?.policyNumber} status=${probe.json?.status}`
+      : `HTTP ${probe.status}: ${(probe.text || '').slice(0, 250)}`,
+  );
+
+  // The control that matters: a stored authorisation must not still work later.
+  const stale = {
+    ...licensee,
+    authorizedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+  };
+  const staleRes = await call('/bind', {
+    body: { quoteId, idempotencyKey: `${key}-stale`, authorizedBy: stale },
+    auth: token,
+    headers: { 'idempotency-key': `${key}-stale` },
+  });
+  record(
+    'A STALE authorisation is refused - the control against unattended binding',
+    'REQUIRED',
+    staleRes.status === 403 || staleRes.status === 422,
+    staleRes.status === 403 || staleRes.status === 422
+      ? `Got HTTP ${staleRes.status}, correctly refused.`
+      : `Got HTTP ${staleRes.status}. An authorisation timestamp hours old must not bind. Without a freshness `
+        + 'window, a stored authorisation can be replayed by a scheduled job and "a licensed human approved '
+        + 'this" stops being true.',
+  );
+
+  const noAuth = await call('/bind', {
+    body: { quoteId, idempotencyKey: `${key}-noauth` },
+    auth: token,
+    headers: { 'idempotency-key': `${key}-noauth` },
+  });
+  record(
+    'Bind WITHOUT authorizedBy is refused',
+    'REQUIRED',
+    noAuth.status >= 400 && noAuth.status < 500,
+    noAuth.status >= 400 && noAuth.status < 500
+      ? `Got HTTP ${noAuth.status}, correctly refused.`
+      : `Got HTTP ${noAuth.status}. Every bind must name the licensee who authorised it.`,
+  );
+
+  // Same key twice must not produce a second policy.
+  const replay = await call('/bind', {
+    body: { quoteId, idempotencyKey: key, authorizedBy: { ...licensee, authorizedAt: new Date().toISOString() } },
+    auth: token,
+    headers: { 'idempotency-key': key },
+  });
+  const samePolicy = replay.status === 200
+    && replay.json?.policyNumber
+    && replay.json.policyNumber === probe.json?.policyNumber;
+  record(
+    'Replaying the same idempotency key returns the SAME policy, not a second one',
+    'REQUIRED',
+    samePolicy,
+    samePolicy
+      ? `Returned ${replay.json.policyNumber} again.`
+      : `First bind gave ${probe.json?.policyNumber}, replay gave ${replay.json?.policyNumber}. A network retry `
+        + 'on a bind must never issue two policies - this is the one endpoint where a duplicate costs real money.',
+  );
+
+  record(
+    'Bind response echoes the authorising licensee',
+    'ADVISORY',
+    probe.json?.authorizedBy?.licenseNumber,
+    'Lets the audit trail answer "who bound this policy" without reference to server logs.',
+  );
 }
 
 

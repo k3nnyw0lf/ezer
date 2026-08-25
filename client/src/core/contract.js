@@ -886,6 +886,93 @@ function rank(quotes) {
   });
 }
 
+// --------------------------------------------------------------------------
+// bind - authorised by a licensed human, never by a schedule
+// --------------------------------------------------------------------------
+
+/**
+ * Binding is the one operation that creates a legal obligation and takes a
+ * client's money, so this contract does not treat it as "quote, but different".
+ *
+ * The rule is NOT "no bind". It is "no UNATTENDED bind": every bind carries the
+ * licence number of the human who authorised it and a timestamp of when they did.
+ *
+ * Four controls, in order of how much they actually prevent:
+ *
+ *   1. authorizedAt must be RECENT. A stored authorisation cannot be replayed by
+ *      a batch job at 3am - the freshness window is what makes "a human was
+ *      present" enforceable rather than merely stated.
+ *   2. idempotencyKey is REQUIRED. A retried request must never bind twice, and
+ *      the retry logic in http.js means retries genuinely happen.
+ *   3. authorizedBy.licenseNumber names a real licensee, so the audit trail
+ *      answers "who bound this policy" without reference to server logs.
+ *   4. There is deliberately NO bindAll(). Quoting fans out; binding does not.
+ *      The absence of the function is the control.
+ *
+ * Honest about the limit: this is a policy and audit control, not a
+ * cryptographic proof that a human clicked. A determined caller can forge a
+ * fresh timestamp. What it does guarantee is that binding cannot happen by
+ * accident, on a schedule, or without a named licensee attached to it.
+ */
+
+const AUTHORIZATION_MAX_AGE_MS = 15 * 60 * 1000;
+
+/** @returns {string[]} problems. Empty means the bind request is well formed. */
+function validateBind(bind, { maxAgeMs = AUTHORIZATION_MAX_AGE_MS, now = Date.now() } = {}) {
+  const problems = [];
+  if (!bind || typeof bind !== 'object') return ['bind must be an object'];
+
+  if (!present(bind.quoteId)) problems.push('quoteId is required - bind always follows a quote');
+  if (!present(bind.idempotencyKey)) {
+    problems.push('idempotencyKey is required so a retried request cannot bind twice');
+  }
+
+  const auth = bind.authorizedBy;
+  if (!auth || typeof auth !== 'object') {
+    problems.push('authorizedBy is required - a licensed human must authorise every bind');
+    return problems;
+  }
+  if (!present(auth.licenseNumber)) problems.push('authorizedBy.licenseNumber is required');
+  if (!present(auth.name)) problems.push('authorizedBy.name is required');
+
+  if (!present(auth.authorizedAt)) {
+    problems.push('authorizedBy.authorizedAt is required');
+  } else {
+    const t = Date.parse(auth.authorizedAt);
+    if (Number.isNaN(t)) {
+      problems.push('authorizedBy.authorizedAt must be an ISO 8601 timestamp');
+    } else if (t > now + 60_000) {
+      problems.push('authorizedBy.authorizedAt is in the future');
+    } else if (now - t > maxAgeMs) {
+      problems.push(
+        `authorizedBy.authorizedAt is ${Math.round((now - t) / 60000)} minutes old; `
+        + `authorisation expires after ${Math.round(maxAgeMs / 60000)} minutes. `
+        + 'Re-authorise with a licensed producer present.',
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Build a bind request. `authorizedBy.authorizedAt` defaults to now, which is
+ * correct precisely because this should be called at the moment the licensee
+ * clicks - never pre-built and queued.
+ */
+function makeBind(quoteId, authorizedBy, extra = {}) {
+  return {
+    quoteId,
+    idempotencyKey: extra.idempotencyKey || `bind-${quoteId}-${Date.now()}`,
+    authorizedBy: { authorizedAt: new Date().toISOString(), ...(authorizedBy || {}) },
+    ...extra,
+  };
+}
+
+/** Did the carrier actually put coverage in force? */
+function isBound(result) {
+  return !!(result && result.status === 'bound' && present(result.policyNumber));
+}
+
 module.exports = {
   LINES,
   registerLine,
@@ -897,4 +984,9 @@ module.exports = {
   isBindable,
   actionableMessages,
   rank,
+  // bind
+  validateBind,
+  makeBind,
+  isBound,
+  AUTHORIZATION_MAX_AGE_MS,
 };

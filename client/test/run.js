@@ -556,6 +556,95 @@ async function geographyTests() {
 }
 
 // ---------------------------------------------------------------------------
+// bind - authorised by a licensed human, never by a schedule
+// ---------------------------------------------------------------------------
+
+async function bindTests() {
+  console.log('\nbind authorisation');
+
+  const { makeBind, validateBind, isBound, AUTHORIZATION_MAX_AGE_MS } = require('../src/core/contract');
+  const LICENSEE = { licenseNumber: 'W774471', name: 'Kenneth Wolf' };
+
+  await test('a fresh authorisation from a licensed human validates', () => {
+    assert.deepStrictEqual(validateBind(makeBind('Q123', LICENSEE)), []);
+  });
+
+  await test('bind without authorizedBy is refused', () => {
+    const b = makeBind('Q123', LICENSEE);
+    delete b.authorizedBy;
+    assert.ok(validateBind(b).some((p) => p.includes('licensed human must authorise')));
+  });
+
+  await test('bind without a licence number is refused', () => {
+    const b = makeBind('Q123', { name: 'Kenneth Wolf' });
+    assert.ok(validateBind(b).some((p) => p.includes('licenseNumber')));
+  });
+
+  await test('a STALE authorisation is refused - the control against unattended binding', () => {
+    const b = makeBind('Q123', LICENSEE);
+    b.authorizedBy.authorizedAt = new Date(Date.now() - (AUTHORIZATION_MAX_AGE_MS + 60_000)).toISOString();
+    const problems = validateBind(b);
+    assert.ok(problems.some((p) => p.includes('expires after')));
+    assert.ok(problems.some((p) => p.includes('Re-authorise')));
+  });
+
+  await test('an authorisation dated in the future is refused', () => {
+    const b = makeBind('Q123', LICENSEE);
+    b.authorizedBy.authorizedAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    assert.ok(validateBind(b).some((p) => p.includes('future')));
+  });
+
+  await test('bind without an idempotency key is refused', () => {
+    const b = makeBind('Q123', LICENSEE);
+    delete b.idempotencyKey;
+    assert.ok(validateBind(b).some((p) => p.includes('idempotencyKey')));
+  });
+
+  await test('bind without a quoteId is refused - bind always follows a quote', () => {
+    const b = makeBind(undefined, LICENSEE);
+    b.quoteId = '';
+    assert.ok(validateBind(b).some((p) => p.includes('quoteId')));
+  });
+
+  await test('an adapter with no bind block CANNOT bind - quote access is not bind access', async () => {
+    const { defineAdapter } = require('../src/core/adapter');
+    const quoteOnly = defineAdapter({ id: 'quoteonly', config: { baseUrl: 'https://x.test' } });
+    await assert.rejects(
+      () => quoteOnly.bind(makeBind('Q1', LICENSEE), { secretStore: new SecretStore() }),
+      (err) => err.code === 'BIND_NOT_CONFIGURED',
+    );
+  });
+
+  await test('a stale authorisation never reaches the carrier', async () => {
+    const { defineAdapter } = require('../src/core/adapter');
+    let called = false;
+    const a = defineAdapter({
+      id: 'bindable',
+      config: { baseUrl: 'https://x.test' },
+      bind: { path: '/bind', body: (b) => b },
+      parseBind: () => { called = true; return {}; },
+    });
+    const b = makeBind('Q1', LICENSEE);
+    b.authorizedBy.authorizedAt = new Date(Date.now() - 60 * 60_000).toISOString();
+    await assert.rejects(() => a.bind(b, { secretStore: new SecretStore() }));
+    assert.strictEqual(called, false, 'carrier must not be called with a stale authorisation');
+  });
+
+  await test('there is deliberately no bindAll()', () => {
+    const client = createClient();
+    assert.strictEqual(typeof client.bind, 'function');
+    assert.strictEqual(client.bindAll, undefined,
+      'binding must never fan out - the absence of the plural is the control');
+  });
+
+  await test('isBound requires both a bound status and a policy number', () => {
+    assert.strictEqual(isBound({ status: 'bound', policyNumber: 'FLRR123' }), true);
+    assert.strictEqual(isBound({ status: 'bound' }), false);
+    assert.strictEqual(isBound({ status: 'referred', policyNumber: 'FLRR123' }), false);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // mapping - the "adaptable to any carrier" machinery
 // ---------------------------------------------------------------------------
 
@@ -779,6 +868,7 @@ async function e2eTests() {
   await redactionTests();
   await contractTests();
   await lineTests();
+  await bindTests();
   await geographyTests();
   await mappingTests();
   await transportTests();

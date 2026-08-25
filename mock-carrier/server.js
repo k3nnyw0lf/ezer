@@ -553,6 +553,105 @@ async function handleQuote(req, res) {
   });
 }
 
+// --------------------------------------------------------------------------
+// bind - authorised by a licensed human, never by a schedule
+// --------------------------------------------------------------------------
+
+/**
+ * Binds already issued, keyed by idempotency key. A carrier MUST return the
+ * original policy on a repeat rather than binding twice - a network retry on a
+ * bind is the one place double-submission actually costs someone money.
+ */
+const BINDS = new Map();
+
+const AUTHORIZATION_MAX_AGE_MS = 15 * 60 * 1000;
+
+async function handleBind(req, res) {
+  const token = bearer(req);
+  if (!token) return send(res, 401, { error: 'unauthorized', error_description: 'Missing Bearer token.' });
+
+  const claims = verifyToken(token);
+  if (!claims) return send(res, 401, { error: 'invalid_token', error_description: 'Token invalid or expired.' });
+
+  const body = await readJson(req);
+  const requestId = body.requestId || newRequestId();
+
+  // Idempotency: header wins, body is the fallback.
+  const key = req.headers['idempotency-key'] || body.idempotencyKey;
+  if (!key) {
+    return send(res, 422, {
+      error: 'validation_failed',
+      error_description: 'idempotencyKey is required so a retried request cannot bind twice.',
+      requestId,
+      fields: ['idempotencyKey'],
+    });
+  }
+  if (BINDS.has(key)) {
+    // Same key, same answer. Never a second policy.
+    return send(res, 200, { ...BINDS.get(key), replayed: true });
+  }
+
+  if (!body.quoteId) {
+    return send(res, 422, {
+      error: 'validation_failed',
+      error_description: 'quoteId is required - a bind always follows a quote.',
+      requestId,
+      fields: ['quoteId'],
+    });
+  }
+
+  // --- the authorisation check, which is the whole point of this endpoint ---
+  const auth = body.authorizedBy;
+  if (!auth || !auth.licenseNumber || !auth.name || !auth.authorizedAt) {
+    return send(res, 422, {
+      error: 'authorization_required',
+      error_description: 'authorizedBy.licenseNumber, .name and .authorizedAt are required. '
+        + 'A licensed human must authorise every bind.',
+      requestId,
+      fields: ['authorizedBy'],
+    });
+  }
+
+  const authAt = Date.parse(auth.authorizedAt);
+  if (Number.isNaN(authAt)) {
+    return send(res, 422, {
+      error: 'authorization_invalid',
+      error_description: 'authorizedBy.authorizedAt must be an ISO 8601 timestamp.',
+      requestId,
+      fields: ['authorizedBy.authorizedAt'],
+    });
+  }
+  const ageMs = Date.now() - authAt;
+  if (ageMs > AUTHORIZATION_MAX_AGE_MS) {
+    // 403, not 422: the request is well formed, the authorisation is simply
+    // too old to still represent a human being present.
+    return send(res, 403, {
+      error: 'authorization_expired',
+      error_description: `Authorisation is ${Math.round(ageMs / 60000)} minutes old; it expires after `
+        + `${Math.round(AUTHORIZATION_MAX_AGE_MS / 60000)}. Re-authorise with a licensed producer present.`,
+      requestId,
+    });
+  }
+
+  const result = {
+    requestId,
+    quoteId: body.quoteId,
+    policyNumber: `POL${crypto.randomInt(1_000_000, 9_999_999)}`,
+    status: 'bound',
+    effectiveDate: body.effectiveDate || null,
+    agency: { agencyCode: claims.agency_code },
+    authorizedBy: { licenseNumber: auth.licenseNumber, name: auth.name, authorizedAt: auth.authorizedAt },
+    messages: [{
+      severity: 'info',
+      code: 'BIND.AUTHORIZED',
+      text: `Bound on the authorisation of ${auth.name}, licence ${auth.licenseNumber}.`,
+    }],
+    documents: [],
+  };
+  BINDS.set(key, result);
+  return send(res, 200, result);
+}
+
 const server = http.createServer(async (req, res) => {
   const { pathname } = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -562,6 +661,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && pathname === '/auth') return await handleAuth(req, res);
     if (req.method === 'POST' && pathname === '/quote') return await handleQuote(req, res);
+    if (req.method === 'POST' && pathname === '/bind') return await handleBind(req, res);
 
     return send(res, 404, { error: 'not_found', error_description: `No route for ${req.method} ${pathname}.` });
   } catch (err) {

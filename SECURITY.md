@@ -43,17 +43,36 @@ rater already holds:
 |---|---|---|
 | Acts on behalf of | Many agencies | One agency, ours |
 | Scope | Quote across the book | Quote, our appointment only |
-| Bind authority | Varies | **None. Quote only.** |
+| Bind authority | Varies | **Per policy, authorised by a named licensee, expiring in 15 minutes.** |
 | Blast radius if leaked | Every agency on the platform | One agency's quoting |
 
-## No bind, by our own policy
+## No UNATTENDED bind, by design
 
-We are not asking for bind, issuance, endorsement, cancellation, or payment endpoints. Binding
-remains a human action performed in your portal by a licensed agent.
+We are not asking for issuance, endorsement, cancellation, or payment endpoints. We do want to bind,
+because quote-only access leaves the agency retyping the entire risk into a portal to put coverage in
+force - which is the problem this exists to solve. What we are not asking for is the ability to bind
+*without a licensed human doing it*.
 
-This is our standing internal policy, not a concession made to get access. An automated quoting bug
-produces a wrong number on a screen. An automated binding bug produces a policy that should not
-exist. We are not willing to carry the second risk, and you should not have to either.
+An automated quoting bug produces a wrong number on a screen. An automated binding bug produces a
+policy that should not exist. So binding is constrained by four controls:
+
+1. **Authorisation expires in 15 minutes.** Every bind carries the timestamp at which a licensed
+   producer authorised it. A stored authorisation cannot be replayed by a scheduled job - the
+   freshness window is what makes "a human was present" enforceable rather than merely stated.
+2. **An idempotency key is required, and binds are never retried.** Our HTTP layer retries transport
+   failures, which is correct for a quote and dangerous for a bind: a request that may have succeeded
+   must not be replayed. Retries are disabled on the bind path; the idempotency key is the backstop.
+3. **Every bind names the licensee.** Licence number and name travel with the request, so the audit
+   trail answers "who bound this policy" without reference to server logs.
+4. **There is no bulk bind.** Quoting fans out across carriers; binding does not. Ten policies means
+   ten authorisations. The absence of the plural is the control.
+
+Honest about the limit: this is a policy and audit control, not cryptographic proof that a human
+clicked. A determined caller could forge a fresh timestamp. What it guarantees is that binding cannot
+happen by accident, on a schedule, or without a named licensee attached to it.
+
+A carrier that prefers to start quote-only is welcome to. The conformance suite skips the bind checks
+entirely when no bind endpoint exists, and reports quote-only as fully conformant.
 
 ## Data handling
 
