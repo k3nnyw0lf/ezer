@@ -54,8 +54,8 @@ async function redactionTests() {
 
   await test('a registered secret is scrubbed from a nested object', () => {
     redact.clearRegisteredSecrets();
-    redact.registerSecret('abc222222289');
-    const out = redact.redact({ a: { b: ['x', 'abc222222289'] } });
+    redact.registerSecret('abc123456789');
+    const out = redact.redact({ a: { b: ['x', 'abc123456789'] } });
     assert.strictEqual(out.a.b[1], '[REDACTED]');
   });
 
@@ -152,6 +152,117 @@ async function contractTests() {
     assert.strictEqual(out[1].premium.annual, 3000);
     assert.strictEqual(out[2].status, 'referred');
     assert.strictEqual(out[3].status, 'declined');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// lines of business - the "adaptable to any kind of insurance" machinery
+// ---------------------------------------------------------------------------
+
+async function lineTests() {
+  console.log('\nlines of business');
+
+  const { registerLine } = require('../src/core/contract');
+
+  await test('FLOOD validates with building limit, no covA and no constructionType needed', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'FLOOD', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Applicant' },
+      property: { address: { line1: '1 Main St', state: 'FL', postalCode: '34102' }, yearBuilt: 2005 },
+      coverages: { building: 250000 },
+      flood: { zone: 'AE', elevationCertificate: true },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+    assert.strictEqual(r.flood.zone, 'AE');
+  });
+
+  await test('FLOOD with neither building nor contents limit is rejected', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'FLOOD', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Applicant' },
+      property: { address: { line1: '1 Main St', state: 'FL', postalCode: '34102' }, yearBuilt: 2005 },
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('coverages.building or coverages.contents')));
+  });
+
+  await test('AUTO validates with a vehicle and driver, and needs no property.yearBuilt', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'AUTO', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Driver' },
+      property: { address: { state: 'FL', postalCode: '34109' } },
+      vehicles: [{ year: 2022, make: 'Toyota', model: 'Camry', use: 'COMMUTE' }],
+      drivers: [{ firstName: 'Test', lastName: 'Driver', dateOfBirth: '1990-01-15' }],
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('AUTO with a vehicle missing both vin and year/make/model is rejected', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'AUTO', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Driver' },
+      property: { address: { state: 'FL', postalCode: '34109' } },
+      vehicles: [{ use: 'COMMUTE' }],
+      drivers: [{ lastName: 'Driver', dateOfBirth: '1990-01-15' }],
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('vehicles.0')));
+  });
+
+  await test('COMMERCIAL BOP validates with business.name instead of applicant.lastName', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'COMMERCIAL', formType: 'BOP', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Roofing LLC', classCode: '91340', annualRevenue: 750000, employees: 6 },
+      property: { address: { line1: '2 Trade St', state: 'FL', postalCode: '34104' } },
+      coverages: { glOccurrence: 1000000, glAggregate: 2000000, bpp: 50000 },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('COMMERCIAL WC without payroll is rejected', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'COMMERCIAL', formType: 'WC', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Roofing LLC' },
+      property: { address: { state: 'FL' } },
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('business.payroll')));
+  });
+
+  await test('TRAVEL validates with a trip and travelers', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'TRAVEL', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Traveler' },
+      trip: { startDate: '2026-11-01', endDate: '2026-11-14', destinationCountry: 'ES', tripCost: 4200 },
+      travelers: [{ dateOfBirth: '1986-11-16' }],
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('an unregistered line is rejected with the list of known lines', () => {
+    const r = makeRisk({ product: { effectiveDate: '2026-10-01' }, applicant: { lastName: 'X' } });
+    r.product.lineOfBusiness = 'PET';
+    const problems = validateRisk(r);
+    assert.ok(problems.some((p) => p.includes('not a registered line')));
+  });
+
+  await test('registerLine adds a new kind of insurance without forking', () => {
+    registerLine('PET', {
+      label: 'Pet',
+      required: [['pet.species'], ['pet.age', (v) => Number(v) >= 0, 'must be >= 0']],
+      skeleton: (p) => ({ pet: { ...(p.pet || {}) } }),
+    });
+    const r = makeRisk({
+      product: { lineOfBusiness: 'PET', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Owner' },
+      pet: { species: 'DOG', age: 4 },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('HO behaviour is unchanged: same defaults, same rejections', () => {
+    const r = goodRisk();
+    assert.strictEqual(r.product.lineOfBusiness, 'HO');
+    assert.strictEqual(r.property.occupancy, 'OWNER');
+    delete r.coverages.covA;
+    assert.ok(validateRisk(r).some((p) => p.startsWith('coverages.covA')));
   });
 }
 
@@ -317,7 +428,7 @@ async function e2eTests() {
         return {
           'e2e/client_id': 'test-client',
           'e2e/client_secret': 'test-secret-value',
-          'e2e/agency_code': '1111111',
+          'e2e/agency_code': '9990714',
         }[k] ?? null;
       },
     },
@@ -378,6 +489,7 @@ async function e2eTests() {
   console.log('wolf-quote-client test suite');
   await redactionTests();
   await contractTests();
+  await lineTests();
   await mappingTests();
   await transportTests();
   await e2eTests();

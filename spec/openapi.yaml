@@ -213,7 +213,13 @@ components:
 
     QuoteRequest:
       type: object
-      required: [product, applicant, property, coverages]
+      required: [product]
+      description: |
+        Which further blocks are required depends on product.lineOfBusiness:
+        HO needs applicant, property, coverages.covA. FLOOD needs property and a
+        building or contents limit. AUTO needs vehicles[] and drivers[]. COMMERCIAL
+        needs business.name. TRAVEL needs trip and travelers[]. The insured is
+        applicant.lastName OR business.name on every line.
       properties:
         requestId:
           type: string
@@ -228,8 +234,20 @@ components:
           type: object
           required: [formType, effectiveDate]
           properties:
-            lineOfBusiness: { type: string, example: HO }
-            formType: { type: string, enum: [HO3, HO4, HO6, DP1, DP3] }
+            lineOfBusiness:
+              type: string
+              description: |
+                Line discriminator. Built-in lines: HO, FLOOD, AUTO, COMMERCIAL, TRAVEL.
+                Each line changes which request blocks are required (see the client's
+                contract.js line registry); the RESPONSE shape is identical for every line.
+              example: HO
+            formType:
+              type: string
+              description: |
+                Line-specific product code. HO: HO3, HO4, HO6, DP1, DP3 (enforced).
+                COMMERCIAL: BOP, GL, WC, PROP, ... (carrier vocabulary). FLOOD/AUTO/TRAVEL:
+                optional or carrier-specific.
+              example: HO3
             effectiveDate: { type: string, format: date }
             termMonths: { type: integer, default: 12 }
         applicant:
@@ -267,6 +285,50 @@ components:
                   amount: { type: number }
         coverages: { $ref: "#/components/schemas/Coverages" }
         mitigation: { $ref: "#/components/schemas/Mitigation" }
+        flood:
+          type: object
+          description: "FLOOD line: zone, elevationCertificate, lowestFloorElevationFeet, foundationType, floorsAboveGround, priorNfipPolicy."
+          additionalProperties: true
+        vehicles:
+          type: array
+          description: "AUTO line: [{ vin | year+make+model, use, annualMiles, comprehensiveDeductible, collisionDeductible }]."
+          items: { type: object, additionalProperties: true }
+        drivers:
+          type: array
+          description: "AUTO line: [{ firstName, lastName, dateOfBirth, licenseNumber, licenseState, incidents }]."
+          items: { type: object, additionalProperties: true }
+        business:
+          type: object
+          description: "COMMERCIAL line: name, dba, fein, entityType, description, classCode, naics, yearsInBusiness, annualRevenue, employees, payroll."
+          additionalProperties: true
+        trip:
+          type: object
+          description: "TRAVEL line: startDate, endDate, destinationCountry, tripCost, initialDepositDate."
+          additionalProperties: true
+        travelers:
+          type: array
+          description: "TRAVEL line: [{ dateOfBirth | age }]."
+          items: { type: object, additionalProperties: true }
+        endorsements:
+          type: object
+          description: "Optional coverages keyed by neutral code, boolean or limit value. Universal, optional."
+          additionalProperties: true
+        scheduledProperty:
+          type: array
+          description: "[{ class, value }] - scheduled personal property. Universal, optional."
+          items: { type: object, additionalProperties: true }
+        priorInsurance:
+          type: object
+          description: "carrier, policyNumber, expirationDate, yearsWithPrior. Universal, optional."
+          additionalProperties: true
+        companionPolicies:
+          type: array
+          description: "[{ type, carrier, policyNumber }] e.g. an in-force flood policy. Universal, optional."
+          items: { type: object, additionalProperties: true }
+        features:
+          type: object
+          description: "Protective devices / discount features: burglarAlarm, fireAlarm, securedCommunity, waterLeakDetection. Universal, optional."
+          additionalProperties: true
         creditConsent:
           type: boolean
           description: Whether the applicant consented to a credit-based insurance score.

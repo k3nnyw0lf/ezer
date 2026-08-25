@@ -1,101 +1,295 @@
 'use strict';
 
 /**
- * The canonical risk and quote shapes.
+ * The canonical risk and quote shapes - multi-line.
  *
- * Everything in this client speaks these two shapes. Carrier-specific vocabulary lives only in
- * adapter definitions, which means adding a carrier never changes calling code.
+ * Everything in this client speaks these shapes. Carrier-specific vocabulary lives only in
+ * adapter definitions, and LINE-specific requirements live only in the registry below - so
+ * adding a carrier is an adapter config, and adding a line of business is a line definition.
  *
- * The response shape mirrors the published EZer contract deliberately, so the mock carrier and
- * conformance tester in the kit exercise the same structures this client consumes.
+ * product.lineOfBusiness is the discriminator: HO, FLOOD, AUTO, COMMERCIAL, TRAVEL out of the
+ * box, and registerLine() adds more without forking. Validation is line-aware; the response
+ * shape (status/messages/premium/coverages) is deliberately identical across every line.
  */
 
-const FORM_TYPES = ['HO3', 'HO4', 'HO6', 'DP1', 'DP3'];
-const CONSTRUCTION = ['FRAME', 'MASONRY', 'MASONRY_VENEER', 'SUPERIOR'];
 const STATUSES = ['quoted', 'referred', 'declined'];
 
-/** @returns {string[]} dotted paths of problems. Empty means valid. */
-function validateRisk(risk) {
-  const problems = [];
-  const need = (path, test, label) => {
-    const value = path.split('.').reduce((a, k) => (a === undefined || a === null ? undefined : a[k]), risk);
-    if (value === undefined || value === null || value === '') {
-      problems.push(`${path} is required`);
-      return;
-    }
-    if (test && !test(value)) problems.push(`${path} ${label}`);
-  };
+// Kept for backward compatibility with existing HO callers and adapters.
+const FORM_TYPES = ['HO3', 'HO4', 'HO6', 'DP1', 'DP3'];
+const CONSTRUCTION = ['FRAME', 'MASONRY', 'MASONRY_VENEER', 'SUPERIOR'];
 
-  if (!risk || typeof risk !== 'object') return ['risk must be an object'];
+// --------------------------------------------------------------------------
+// helpers
+// --------------------------------------------------------------------------
 
-  need('product.formType', (v) => FORM_TYPES.includes(v), `must be one of ${FORM_TYPES.join(', ')}`);
-  need('product.effectiveDate', (v) => /^\d{4}-\d{2}-\d{2}$/.test(v), 'must be YYYY-MM-DD');
-  need('applicant.lastName');
-  need('property.address.line1');
-  need('property.address.state', (v) => /^[A-Z]{2}$/.test(v), 'must be a 2-letter state code');
-  need('property.address.postalCode', (v) => /^\d{5}(-\d{4})?$/.test(String(v)), 'must be a US ZIP');
-  need('property.yearBuilt', (v) => Number(v) > 1800 && Number(v) <= new Date().getUTCFullYear() + 1, 'is out of range');
-  need('property.constructionType', (v) => CONSTRUCTION.includes(v), `must be one of ${CONSTRUCTION.join(', ')}`);
-  need('coverages.covA', (v) => Number(v) > 0, 'must be a positive number');
-
-  return problems;
+function get(obj, path) {
+  return String(path).split('.').reduce((a, k) => (a === undefined || a === null ? undefined : a[k]), obj);
 }
 
-/** Build a canonical risk with sane defaults, so callers supply only what varies. */
-function makeRisk(partial = {}) {
-  return {
-    requestId: partial.requestId,
-    agency: { ...(partial.agency || {}) },
-    product: { lineOfBusiness: 'HO', termMonths: 12, ...(partial.product || {}) },
-    applicant: { ...(partial.applicant || {}) },
+function present(v) {
+  return v !== undefined && v !== null && v !== '';
+}
+
+const IS_DATE = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+const IS_STATE = (v) => /^[A-Z]{2}$/.test(String(v));
+const IS_ZIP = (v) => /^\d{5}(-\d{4})?$/.test(String(v));
+const IS_POSITIVE = (v) => Number(v) > 0;
+const IS_YEAR = (v) => Number(v) > 1800 && Number(v) <= new Date().getUTCFullYear() + 1;
+
+// --------------------------------------------------------------------------
+// line-of-business registry
+// --------------------------------------------------------------------------
+
+/**
+ * A line definition:
+ *   label      human name
+ *   formTypes  allowed product.formType values, or null for free-form
+ *   required   [ [path, test, message] ] - test/message optional
+ *   validate   (risk) => string[]        - extra cross-field rules
+ *   skeleton   (partial) => object       - line-specific blocks for makeRisk
+ */
+const LINES = {};
+
+function registerLine(code, def) {
+  if (!code || typeof code !== 'string') throw new Error('registerLine needs a line code.');
+  LINES[code.toUpperCase()] = { label: code, formTypes: null, required: [], skeleton: () => ({}), ...def };
+  return LINES[code.toUpperCase()];
+}
+
+// ---- Homeowners / dwelling fire (the original shape, unchanged) ----------
+registerLine('HO', {
+  label: 'Homeowners / Dwelling Fire',
+  formTypes: FORM_TYPES,
+  required: [
+    ['applicant.lastName'],
+    ['property.address.line1'],
+    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
+    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP'],
+    ['property.yearBuilt', IS_YEAR, 'is out of range'],
+    ['property.constructionType', (v) => CONSTRUCTION.includes(v), `must be one of ${CONSTRUCTION.join(', ')}`],
+    ['coverages.covA', IS_POSITIVE, 'must be a positive number'],
+  ],
+  skeleton: (p) => ({
     property: {
       occupancy: 'OWNER',
       usage: 'PRIMARY',
       priorClaims: [],
-      ...(partial.property || {}),
-      address: { state: 'FL', ...((partial.property || {}).address || {}) },
+      ...(p.property || {}),
+      address: { state: 'FL', ...((p.property || {}).address || {}) },
     },
+  }),
+});
+
+// ---- Flood (NFIP + private: Neptune, Wright, Floodsol shapes) ------------
+registerLine('FLOOD', {
+  label: 'Flood',
+  formTypes: null,
+  required: [
+    ['applicant.lastName'],
+    ['property.address.line1'],
+    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
+    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP'],
+    ['property.yearBuilt', IS_YEAR, 'is out of range'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    if (!present(get(risk, 'coverages.building')) && !present(get(risk, 'coverages.contents'))) {
+      problems.push('coverages.building or coverages.contents is required for FLOOD');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    property: {
+      occupancy: 'OWNER',
+      usage: 'PRIMARY',
+      ...(p.property || {}),
+      address: { state: 'FL', ...((p.property || {}).address || {}) },
+    },
+    // Flood-specific facts private carriers actually rate on. All optional.
+    // { zone, elevationCertificate, lowestFloorElevationFeet, baseFloodElevationFeet,
+    //   foundationType, floorsAboveGround, enclosure, priorNfipPolicy, cbrsZone }
+    flood: { ...(p.flood || {}) },
+  }),
+});
+
+// ---- Personal auto -------------------------------------------------------
+registerLine('AUTO', {
+  label: 'Personal Auto',
+  formTypes: null,
+  required: [
+    ['property.address.state', IS_STATE, 'must be a 2-letter state code (garaging state)'],
+    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP (garaging ZIP)'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const vehicles = risk.vehicles || [];
+    const drivers = risk.drivers || [];
+    if (!vehicles.length) problems.push('vehicles must contain at least one vehicle');
+    vehicles.forEach((v, i) => {
+      if (!present(v.vin) && !(present(v.year) && present(v.make) && present(v.model))) {
+        problems.push(`vehicles.${i} needs a vin, or year + make + model`);
+      }
+    });
+    if (!drivers.length) problems.push('drivers must contain at least one driver');
+    drivers.forEach((d, i) => {
+      if (!present(d.lastName)) problems.push(`drivers.${i}.lastName is required`);
+      if (!present(d.dateOfBirth) && !present(d.licenseNumber)) {
+        problems.push(`drivers.${i} needs dateOfBirth or licenseNumber`);
+      }
+    });
+    return problems;
+  },
+  skeleton: (p) => ({
+    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    // [{ vin | year+make+model, use: 'COMMUTE', annualMiles, comprehensiveDeductible, collisionDeductible }]
+    vehicles: [...(p.vehicles || [])],
+    // [{ firstName, lastName, dateOfBirth, licenseNumber, licenseState, incidents: [] }]
+    drivers: [...(p.drivers || [])],
+  }),
+});
+
+// ---- Commercial (BOP / GL / WC / commercial property) --------------------
+registerLine('COMMERCIAL', {
+  label: 'Commercial',
+  formTypes: null, // BOP, GL, WC, PROP, CYBER, ... carrier vocabularies differ too much to enumerate
+  required: [
+    ['product.formType', undefined, 'is required (e.g. BOP, GL, WC)'],
+    ['business.name'],
+    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || '').toUpperCase();
+    if (ft === 'WC' && !present(get(risk, 'business.payroll'))) {
+      problems.push('business.payroll is required for WC');
+    }
+    if ((ft === 'BOP' || ft === 'PROP') && !present(get(risk, 'property.address.line1'))) {
+      problems.push('property.address.line1 is required for premises-based forms');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    // What commercial carriers actually rate on. classCode is the carrier's or NAICS.
+    business: {
+      // name, dba, fein, entityType, description, classCode, naics,
+      // yearsInBusiness, annualRevenue, employees, payroll, website
+      ...(p.business || {}),
+    },
+  }),
+});
+
+// ---- Travel --------------------------------------------------------------
+registerLine('TRAVEL', {
+  label: 'Travel',
+  formTypes: null,
+  required: [
+    ['trip.startDate', IS_DATE, 'must be YYYY-MM-DD'],
+    ['trip.endDate', IS_DATE, 'must be YYYY-MM-DD'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const travelers = risk.travelers || [];
+    if (!travelers.length) problems.push('travelers must contain at least one traveler');
+    travelers.forEach((t, i) => {
+      if (!present(t.dateOfBirth) && !present(t.age)) problems.push(`travelers.${i} needs dateOfBirth or age`);
+    });
+    return problems;
+  },
+  skeleton: (p) => ({
+    // { startDate, endDate, destinationCountry, tripCost, initialDepositDate }
+    trip: { ...(p.trip || {}) },
+    travelers: [...(p.travelers || [])],
+  }),
+});
+
+// --------------------------------------------------------------------------
+// validation + construction
+// --------------------------------------------------------------------------
+
+/** @returns {string[]} dotted paths of problems. Empty means valid. */
+function validateRisk(risk) {
+  if (!risk || typeof risk !== 'object') return ['risk must be an object'];
+  const problems = [];
+
+  const lob = String(get(risk, 'product.lineOfBusiness') || 'HO').toUpperCase();
+  const line = LINES[lob];
+  if (!line) {
+    return [`product.lineOfBusiness "${lob}" is not a registered line (have: ${Object.keys(LINES).join(', ')})`];
+  }
+
+  // Universal requirements.
+  if (!present(get(risk, 'product.effectiveDate'))) problems.push('product.effectiveDate is required');
+  else if (!IS_DATE(get(risk, 'product.effectiveDate'))) problems.push('product.effectiveDate must be YYYY-MM-DD');
+
+  // Insured: a person (applicant.lastName) or a business (business.name).
+  if (!present(get(risk, 'applicant.lastName')) && !present(get(risk, 'business.name'))) {
+    problems.push('applicant.lastName or business.name is required');
+  }
+
+  // Form type, when the line constrains it.
+  if (line.formTypes) {
+    const ft = get(risk, 'product.formType');
+    if (!present(ft)) problems.push('product.formType is required');
+    else if (!line.formTypes.includes(ft)) {
+      problems.push(`product.formType must be one of ${line.formTypes.join(', ')}`);
+    }
+  }
+
+  // Line-declared required paths.
+  for (const [path, test, label] of line.required) {
+    const v = get(risk, path);
+    if (!present(v)) problems.push(`${path} is required`);
+    else if (test && !test(v)) problems.push(`${path} ${label || 'is invalid'}`);
+  }
+
+  // Line-specific cross-field rules.
+  if (typeof line.validate === 'function') problems.push(...line.validate(risk));
+
+  return problems;
+}
+
+/** Build a canonical risk with line-appropriate defaults. */
+function makeRisk(partial = {}) {
+  const lob = String((partial.product || {}).lineOfBusiness || 'HO').toUpperCase();
+  const line = LINES[lob] || LINES.HO;
+
+  return {
+    requestId: partial.requestId,
+    agency: { ...(partial.agency || {}) },
+    product: { lineOfBusiness: lob, termMonths: 12, ...(partial.product || {}) },
+    applicant: { ...(partial.applicant || {}) },
     coverages: { ...(partial.coverages || {}) },
     mitigation: { ...(partial.mitigation || {}) },
 
-    // ---------------------------------------------------------------------
-    // Optional blocks, added after validating this contract against a live
-    // FL carrier's production HO3 schema (123 fields). The core above covers
-    // the rating spine; these carry what real carriers additionally rate on.
-    // All optional - validation does not require them - but adapters need
-    // somewhere canonical to map them FROM, or every carrier grows bespoke
-    // risk fields and the "one canonical shape" promise quietly dies.
-    // ---------------------------------------------------------------------
+    // Line-specific blocks (property/flood/vehicles/drivers/business/trip...).
+    ...line.skeleton(partial),
 
-    // Endorsements / optional coverages, keyed by a neutral code with a
-    // boolean or limit value. e.g. { waterDamage: true, animalLiability: 300000,
-    // ordinanceOrLaw: '25%', equipmentBreakdown: true, sinkhole: false }
+    // ---------------------------------------------------------------------
+    // Universal optional blocks, added after validating this contract
+    // against a production FL carrier's 123-field HO3 schema. Optional on
+    // every line - validation never requires them - but adapters need a
+    // canonical slot to map them FROM, or each carrier grows bespoke risk
+    // fields and the one-shape promise quietly dies.
+    // ---------------------------------------------------------------------
     endorsements: { ...(partial.endorsements || {}) },
-
-    // Scheduled personal property: [{ class: 'JEWELRY', value: 15000 }, ...]
     scheduledProperty: [...(partial.scheduledProperty || [])],
-
-    // Prior carrier and companion policies - FL carriers rate and gate on both.
-    // priorInsurance: { carrier, policyNumber, expirationDate, yearsWithPrior }
     priorInsurance: { ...(partial.priorInsurance || {}) },
-    // companionPolicies: [{ type: 'FLOOD', carrier, policyNumber }, ...]
     companionPolicies: [...(partial.companionPolicies || [])],
-
-    // Protective devices and discount-bearing features.
-    // e.g. { burglarAlarm: 'CENTRAL', fireAlarm: 'CENTRAL', securedCommunity: true,
-    //        sprinklers: false, waterLeakDetection: true }
     features: { ...(partial.features || {}) },
 
     creditConsent: partial.creditConsent ?? false,
   };
 }
 
+// --------------------------------------------------------------------------
+// response helpers (identical across all lines, on purpose)
+// --------------------------------------------------------------------------
+
 /**
- * Was this a usable answer?
- *
- * Deliberately explicit rather than truthiness on `premium`, because a carrier can return a
- * premium alongside a decline, and a referral can carry an indicative premium that must not be
- * presented to a client as final.
+ * Was this a usable answer? Deliberately explicit rather than truthiness on `premium`,
+ * because a carrier can return a premium alongside a decline, and a referral can carry
+ * an indicative premium that must not be presented to a client as final.
  */
 function isBindable(quote) {
   return quote && quote.status === 'quoted' && quote.premium && typeof quote.premium.annual === 'number';
@@ -120,6 +314,8 @@ function rank(quotes) {
 }
 
 module.exports = {
+  LINES,
+  registerLine,
   FORM_TYPES,
   CONSTRUCTION,
   STATUSES,

@@ -121,6 +121,22 @@ defineAdapter({
 
 Every hook also accepts a function, so a genuinely strange carrier never forces a fork.
 
+## Any kind of insurance
+
+`product.lineOfBusiness` selects a line definition: **HO, FLOOD, AUTO, COMMERCIAL, TRAVEL** ship
+built in, each declaring its own required fields and risk blocks (`flood`, `vehicles`/`drivers`,
+`business`, `trip`/`travelers`). The response shape — `status`, `messages`, `premium`, `coverages` —
+is deliberately identical across every line, so comparison and ranking code never changes.
+
+Adding a kind of insurance is a declaration, not a fork:
+
+```js
+registerLine('PET', {
+  required: [['pet.species'], ['pet.age', (v) => v >= 0, 'must be >= 0']],
+  skeleton: (p) => ({ pet: { ...(p.pet || {}) } }),
+});
+```
+
 ---
 
 ## Help wanted
@@ -138,8 +154,10 @@ solo one.
   will contain errors. Corrections very welcome.
 - **Carrier and MGA engineers.** If this contract would be annoying to implement, say so in an
   issue. It is far cheaper to fix now than after anyone builds against it.
-- **Lines beyond homeowners.** The contract is HO-shaped today. Auto, flood, and commercial all
-  want a look.
+- **Line-of-business review.** The contract now covers HO, flood, auto, commercial and travel as a
+  registry — `registerLine()` adds a new kind of insurance without forking. The definitions were
+  written by an agency that writes these lines, not by a standards committee; if you underwrite
+  them, review the required fields and tell us what is wrong.
 - **Security review.** The redaction and secret-handling code is the part where a mistake actually
   costs someone something. Adversarial review is welcome.
 
