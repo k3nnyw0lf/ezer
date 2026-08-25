@@ -1,0 +1,55 @@
+{
+  "requestId": "wolf-2026-08-25-0001",
+  "agency": {
+    "agencyCode": "1111111",
+    "producerNPN": "12345678",
+    "licenseNumber": "AB123456"
+  },
+  "product": {
+    "lineOfBusiness": "HO",
+    "formType": "HO3",
+    "effectiveDate": "2026-10-01",
+    "termMonths": 12
+  },
+  "applicant": {
+    "firstName": "Test",
+    "lastName": "Applicant",
+    "dateOfBirth": "1980-05-14",
+    "email": "agent@example-agency.com",
+    "phone": "2395550147"
+  },
+  "property": {
+    "address": {
+      "line1": "1100 5th Ave S",
+      "city": "Naples",
+      "state": "FL",
+      "postalCode": "34102",
+      "county": "Collier"
+    },
+    "yearBuilt": 2005,
+    "constructionType": "MASONRY",
+    "roofYear": 2019,
+    "roofType": "ARCHITECTURAL_SHINGLE",
+    "squareFeet": 2100,
+    "stories": 1,
+    "occupancy": "OWNER",
+    "usage": "PRIMARY",
+    "protectionClass": "3",
+    "distanceToCoastMiles": 2.4,
+    "floodZone": "X",
+    "priorClaims": []
+  },
+  "coverages": {
+    "covA": 450000,
+    "allOtherPerilsDeductible": 2500,
+    "hurricaneDeductible": "2%"
+  },
+  "mitigation": {
+    "openingProtection": "ALL",
+    "roofDeckAttachment": "B",
+    "roofWallConnection": "DOUBLE_WRAPS",
+    "secondaryWaterResistance": true,
+    "roofShape": "HIP"
+  },
+  "creditConsent": true
+}

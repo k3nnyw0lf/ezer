@@ -1,0 +1,341 @@
+openapi: 3.0.3
+info:
+  title: Agency-Direct Quoting API
+  version: "1.0.0"
+  description: |
+    Proposed contract for agency-direct homeowners quoting, published by Demo Agency A
+    (Example Agency Inc, FL license AB123456, agency L000000, NPN 12345678).
+
+    This is a STARTING PROPOSAL, not a requirement. If the carrier already exposes a rating
+    service to a comparative rater, we will conform to that existing schema instead — including
+    ACORD personal-lines XML. The purpose of this document is to give a carrier's team something
+    concrete to react to.
+
+    Design decisions worth noting, each drawn from running live carrier integrations:
+
+    1. Underwriting outcomes are HTTP 200 with `status` = quoted | referred | declined.
+       4xx and 5xx are reserved for transport, auth and validation failures. Conflating an
+       underwriting decline with an HTTP error makes real outages indistinguishable from
+       routine declines.
+    2. `messages` is REQUIRED on every response, including successes. Send an empty array when
+       there is nothing to say. We have seen a carrier return HTTP 200 and a valid quote ID while
+       the actual decision sat unread in a messages array.
+    3. Coverages actually rated are echoed back, so the agency can detect carrier-side adjustment.
+    4. Credentials are AGENCY-SCOPED. A token issued to one agency cannot quote as another. This
+       makes the agency credential strictly less privileged than the partner credential a
+       comparative rater already holds.
+
+servers:
+  - url: https://sandbox.example-carrier.com
+    description: Carrier sandbox
+  - url: http://localhost:8787
+    description: Bundled reference implementation (mock-carrier/server.js)
+
+paths:
+  /auth:
+    post:
+      summary: Exchange agency-scoped client credentials for a short-lived token
+      operationId: auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type, client_id, client_secret]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+                client_id:
+                  type: string
+                  description: Credential issued by the carrier to a single agency.
+                client_secret:
+                  type: string
+                agency_code:
+                  type: string
+                  description: |
+                    The agency's code with this carrier — the same identifier the carrier already
+                    resolves when a comparative rater quotes on the agency's behalf. If supplied it
+                    MUST match the code the credential is bound to.
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token, token_type, expires_in]
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, enum: [Bearer] }
+                  expires_in: { type: integer, example: 3600 }
+                  scope: { type: string, example: "quote:ho" }
+                  agency_code:
+                    type: string
+                    description: Echoed so the client can fail fast on a mis-issued credential.
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+
+  /quote:
+    post:
+      summary: Rate a homeowners risk
+      operationId: quote
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuoteRequest" }
+      responses:
+        "200":
+          description: |
+            The rating call succeeded. Read `status` for the underwriting outcome — a decline is a
+            successful call with a negative answer, and still arrives here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuoteResponse" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403":
+          description: Token is scoped to a different agency than the request specified.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Request is malformed or missing required fields.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      fields:
+                        type: array
+                        items: { type: string }
+                        example: ["property.yearBuilt", "coverages.covA"]
+
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    AuthError:
+      description: Authentication or authorisation failure
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: invalid_client }
+        error_description: { type: string }
+        requestId: { type: string }
+
+    Message:
+      type: object
+      required: [severity, code, text]
+      properties:
+        severity:
+          type: string
+          enum: [info, warning, error]
+        code:
+          type: string
+          description: Stable machine-readable code. We branch on this, never on `text`.
+          example: UW.ROOF.AGE
+        text:
+          type: string
+          description: Human-readable, shown verbatim to the agent.
+        field:
+          type: string
+          description: Dotted path to the offending input, when applicable.
+          example: property.roofYear
+
+    Address:
+      type: object
+      required: [line1, city, state, postalCode]
+      properties:
+        line1: { type: string }
+        line2: { type: string }
+        city: { type: string }
+        state: { type: string, example: FL }
+        postalCode: { type: string, example: "34102" }
+        county: { type: string, example: Collier }
+
+    Coverages:
+      type: object
+      properties:
+        covA: { type: number, description: Dwelling }
+        covB: { type: number, description: Other structures }
+        covC: { type: number, description: Personal property }
+        covD: { type: number, description: Loss of use }
+        covE: { type: number, description: Personal liability }
+        covF: { type: number, description: Medical payments }
+        allOtherPerilsDeductible: { type: number, example: 2500 }
+        hurricaneDeductible:
+          oneOf:
+            - type: string
+            - type: number
+          description: Percentage as a string ("2%") or a flat dollar amount.
+          example: "2%"
+
+    Mitigation:
+      type: object
+      description: Florida wind mitigation. Materially affects premium; send when known.
+      properties:
+        openingProtection: { type: string, enum: [NONE, PARTIAL, ALL] }
+        roofDeckAttachment: { type: string, example: B }
+        roofWallConnection: { type: string, enum: [TOE_NAILS, CLIPS, SINGLE_WRAPS, DOUBLE_WRAPS] }
+        secondaryWaterResistance: { type: boolean }
+        roofShape: { type: string, enum: [HIP, GABLE, FLAT, OTHER] }
+
+    QuoteRequest:
+      type: object
+      required: [product, applicant, property, coverages]
+      properties:
+        requestId:
+          type: string
+          description: Agency-generated idempotency and tracing key. Echo it back.
+        agency:
+          type: object
+          properties:
+            agencyCode: { type: string, example: "1111111" }
+            producerNPN: { type: string, example: "12345678" }
+            licenseNumber: { type: string, example: AB123456 }
+        product:
+          type: object
+          required: [formType, effectiveDate]
+          properties:
+            lineOfBusiness: { type: string, example: HO }
+            formType: { type: string, enum: [HO3, HO4, HO6, DP1, DP3] }
+            effectiveDate: { type: string, format: date }
+            termMonths: { type: integer, default: 12 }
+        applicant:
+          type: object
+          required: [lastName]
+          properties:
+            firstName: { type: string }
+            lastName: { type: string }
+            dateOfBirth: { type: string, format: date }
+            email: { type: string, format: email }
+            phone: { type: string }
+        property:
+          type: object
+          required: [address, yearBuilt, constructionType]
+          properties:
+            address: { $ref: "#/components/schemas/Address" }
+            yearBuilt: { type: integer, example: 2005 }
+            constructionType: { type: string, enum: [FRAME, MASONRY, MASONRY_VENEER, SUPERIOR] }
+            roofYear: { type: integer }
+            roofType: { type: string }
+            squareFeet: { type: integer }
+            stories: { type: integer }
+            occupancy: { type: string, enum: [OWNER, TENANT, SEASONAL, VACANT] }
+            usage: { type: string, enum: [PRIMARY, SECONDARY, RENTAL] }
+            protectionClass: { type: string }
+            distanceToCoastMiles: { type: number }
+            floodZone: { type: string }
+            priorClaims:
+              type: array
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  peril: { type: string }
+                  amount: { type: number }
+        coverages: { $ref: "#/components/schemas/Coverages" }
+        mitigation: { $ref: "#/components/schemas/Mitigation" }
+        creditConsent:
+          type: boolean
+          description: Whether the applicant consented to a credit-based insurance score.
+
+    QuoteResponse:
+      type: object
+      required: [quoteId, status, messages]
+      properties:
+        requestId: { type: string }
+        quoteId: { type: string, example: Q5045662 }
+        status:
+          type: string
+          enum: [quoted, referred, declined]
+          description: |
+            Single source of truth for the underwriting outcome. Do not infer it from the HTTP
+            status or from the presence of a premium.
+        agency:
+          type: object
+          properties:
+            agencyCode: { type: string }
+        carrier:
+          type: object
+          properties:
+            name: { type: string }
+            naic: { type: string }
+        product:
+          type: object
+          properties:
+            formType: { type: string }
+            effectiveDate: { type: string, format: date }
+            termMonths: { type: integer }
+        premium:
+          type: object
+          nullable: true
+          description: Null when declined.
+          properties:
+            annual: { type: number }
+            fees: { type: number }
+            taxes: { type: number }
+            total: { type: number }
+            currency: { type: string, example: USD }
+        payPlans:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string, example: MO4 }
+              description: { type: string }
+              downPayment: { type: number }
+              installmentAmount: { type: number }
+              installments: { type: integer }
+        coverages:
+          allOf:
+            - $ref: "#/components/schemas/Coverages"
+          description: |
+            The coverages ACTUALLY RATED, not the ones requested. Where the carrier overrode a
+            requested value, say so in `messages` as well.
+        messages:
+          type: array
+          description: REQUIRED on every response. Send [] when empty.
+          items: { $ref: "#/components/schemas/Message" }
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, example: quote_proposal }
+              url: { type: string, format: uri }

@@ -1,0 +1,21 @@
+{
+  "requestId": "wolf-2026-08-25-0002",
+  "quoteId": "Q5045663",
+  "status": "declined",
+  "agency": { "agencyCode": "1111111" },
+  "carrier": { "name": "Example Carrier", "naic": "12345" },
+  "product": { "formType": "HO3", "effectiveDate": "2026-10-01", "termMonths": 12 },
+  "premium": null,
+  "payPlans": [],
+  "coverages": null,
+  "messages": [
+    {
+      "severity": "error",
+      "code": "UW.ROOF.AGE",
+      "text": "Roof age 41 years exceeds the maximum of 25 for HO3.",
+      "field": "property.roofYear"
+    }
+  ],
+  "expiresAt": null,
+  "documents": []
+}

@@ -1,0 +1,17 @@
+# Secrets - never commit
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# Carrier adapters built from a carrier's CONFIDENTIAL integration document.
+# See CONTRIBUTING.md, "Carrier specifications".
+client/src/adapters/private/
+
+# Runtime
+node_modules/
+npm-debug.log*
+*.log
+.DS_Store

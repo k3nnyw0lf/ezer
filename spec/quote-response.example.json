@@ -1,0 +1,57 @@
+{
+  "requestId": "wolf-2026-08-25-0001",
+  "quoteId": "Q5045662",
+  "status": "quoted",
+  "agency": { "agencyCode": "1111111" },
+  "carrier": { "name": "Example Carrier", "naic": "12345" },
+  "product": {
+    "formType": "HO3",
+    "effectiveDate": "2026-10-01",
+    "termMonths": 12
+  },
+  "premium": {
+    "annual": 2464.06,
+    "fees": 25.0,
+    "taxes": 43.12,
+    "total": 2532.18,
+    "currency": "USD"
+  },
+  "payPlans": [
+    {
+      "code": "FULL",
+      "description": "Paid in full",
+      "downPayment": 2532.18,
+      "installmentAmount": 0,
+      "installments": 0
+    },
+    {
+      "code": "MO4",
+      "description": "4 pay",
+      "downPayment": 633.04,
+      "installmentAmount": 633.04,
+      "installments": 3
+    }
+  ],
+  "coverages": {
+    "covA": 450000,
+    "covB": 9000,
+    "covC": 225000,
+    "covD": 45000,
+    "covE": 300000,
+    "covF": 5000,
+    "allOtherPerilsDeductible": 2500,
+    "hurricaneDeductible": "2%"
+  },
+  "messages": [
+    {
+      "severity": "info",
+      "code": "RATE.CREDIT.APPLIED",
+      "text": "Credit-based insurance score applied.",
+      "field": "creditConsent"
+    }
+  ],
+  "expiresAt": "2026-09-24T15:00:00Z",
+  "documents": [
+    { "type": "quote_proposal", "url": "https://sandbox.example-carrier.com/docs/Q5045662.pdf" }
+  ]
+}
