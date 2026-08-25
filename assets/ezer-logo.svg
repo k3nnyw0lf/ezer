@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 72" width="320" height="72" role="img" aria-label="EZer">
+  <title>EZer</title>
+  <desc>EZer logo: an agency and a carrier joined by a direct line, with the detour it replaces drawn faintly above.</desc>
+
+  <!-- Neo-brutalist to match wolfsurety.com: hard black keyline, solid offset shadow,
+       no blur, sharp corners, brand teal. -->
+
+  <!-- ── Mark ───────────────────────────────────────────────────────────── -->
+  <rect x="7" y="7" width="63" height="63" fill="#0A0A0F"/>
+  <rect x="2.5" y="2.5" width="63" height="63" fill="#00D9C0" stroke="#0A0A0F" stroke-width="3.5"/>
+  <path d="M21 44 Q36 6 51 44"
+        fill="none" stroke="#0A0A0F" stroke-opacity="0.42"
+        stroke-width="3.5" stroke-linecap="round" stroke-dasharray="2.5 5.5"/>
+  <path d="M21 44 H51" fill="none" stroke="#0A0A0F" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="21" cy="44" r="6.5" fill="#0A0A0F"/>
+  <circle cx="51" cy="44" r="6.5" fill="#0A0A0F"/>
+
+  <!-- ── Wordmark ───────────────────────────────────────────────────────────
+       Drawn as geometry, not text: an SVG embedded as an image cannot load a font,
+       and a system-font fallback renders differently on every machine. Heavy monoline
+       to sit with the site's bold display type. -->
+  <g fill="none" stroke="#0A0A0F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- e : crossbar through the centre, bowl opening at lower right -->
+    <path d="M94 38 H116 A11 11 0 1 0 112.7 45.8"/>
+
+    <!-- z : top bar, diagonal, bottom bar -->
+    <path d="M131 27 H151 L131 49 H151"/>
+
+    <!-- e -->
+    <path d="M165 38 H187 A11 11 0 1 0 183.7 45.8"/>
+
+    <!-- r : stem with a shoulder -->
+    <path d="M202 49 V27"/>
+    <path d="M202 34.5 C202 28 209 25.5 216 27.5"/>
+  </g>
+</svg>

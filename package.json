@@ -1,7 +1,7 @@
 {
   "name": "ezer",
   "version": "0.1.0",
-  "description": "An open contract, reference implementation, and client for agency-direct insurance quoting. Zero dependencies.",
+  "description": "An open contract, reference implementation, and client for agency-direct insurance quoting - 11 lines of business, multistate and international, zero dependencies.",
   "main": "client/src/index.js",
   "scripts": {
     "test": "node client/test/run.js",
@@ -16,7 +16,29 @@
     "type": "git",
     "url": "git+https://github.com/k3nnyw0lf/ezer.git"
   },
-  "keywords": ["insurance", "insurtech", "acord", "quoting", "api", "open-standard"],
+  "keywords": [
+    "insurance",
+    "insurtech",
+    "acord",
+    "quoting",
+    "quoting-api",
+    "rating-api",
+    "insurance-api",
+    "carrier-integration",
+    "insurance-agency",
+    "independent-agent",
+    "open-standard",
+    "openapi",
+    "home-insurance",
+    "flood-insurance",
+    "life-insurance",
+    "commercial-insurance",
+    "auto-insurance",
+    "health-insurance",
+    "surety-bonds",
+    "home-warranty",
+    "zero-dependency"
+  ],
   "author": "Kenneth Wolf <ken@wolfsurety.com> (Wolf Surety Inc dba Wolf Insurance)",
   "license": "MIT",
   "dependencies": {}

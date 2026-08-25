@@ -1,4 +1,4 @@
-# EZer
+<img src="assets/ezer-logo.svg" alt="EZer" width="300">
 
 [![ci](https://github.com/k3nnyw0lf/ezer/actions/workflows/ci.yml/badge.svg)](https://github.com/k3nnyw0lf/ezer/actions/workflows/ci.yml)
 

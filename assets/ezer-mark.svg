@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72" role="img" aria-label="EZer">
+  <title>EZer</title>
+  <desc>An agency and a carrier joined by a direct line, with the detour it replaces drawn faintly above.</desc>
+
+  <!-- Neo-brutalist: hard black keyline and a solid offset shadow, no blur, sharp corners.
+       Matches wolfsurety.com, where the headline reads "without the runaround" - the same
+       idea this mark draws. -->
+
+  <!-- Offset shadow -->
+  <rect x="7" y="7" width="63" height="63" fill="#0A0A0F"/>
+
+  <!-- Badge. Teal is the site's highlight colour, and it reads on light and dark alike. -->
+  <rect x="2.5" y="2.5" width="63" height="63" fill="#00D9C0" stroke="#0A0A0F" stroke-width="3.5"/>
+
+  <!-- The detour being bypassed: agency -> rater -> carrier. Dashed, because it is the
+       path EZer makes unnecessary. Control point sits above the box so the curve PEAKS
+       at y=25; a quadratic only travels halfway to its control. -->
+  <path d="M21 44 Q36 6 51 44"
+        fill="none" stroke="#0A0A0F" stroke-opacity="0.42"
+        stroke-width="3.5" stroke-linecap="round" stroke-dasharray="2.5 5.5"/>
+
+  <!-- The direct connection. -->
+  <path d="M21 44 H51" fill="none" stroke="#0A0A0F" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Endpoints: the agency and the carrier. -->
+  <circle cx="21" cy="44" r="6.5" fill="#0A0A0F"/>
+  <circle cx="51" cy="44" r="6.5" fill="#0A0A0F"/>
+</svg>
