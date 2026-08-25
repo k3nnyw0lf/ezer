@@ -7,8 +7,9 @@
  * adapter definitions, and LINE-specific requirements live only in the registry below - so
  * adding a carrier is an adapter config, and adding a line of business is a line definition.
  *
- * product.lineOfBusiness is the discriminator: HO, FLOOD, AUTO, COMMERCIAL, TRAVEL out of the
- * box, and registerLine() adds more without forking. Validation is line-aware; the response
+ * product.lineOfBusiness is the discriminator. Eleven lines ship built in - HO (incl.
+ * manufactured home), FLOOD, AUTO, COMMERCIAL, TRAVEL, HEALTH, LIFE, SURETY, UMBRELLA,
+ * RECREATIONAL, HOME_WARRANTY - and registerLine() adds more without forking. Validation is line-aware; the response
  * shape (status/messages/premium/coverages) is deliberately identical across every line.
  */
 

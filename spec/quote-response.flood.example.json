@@ -1,0 +1,54 @@
+{
+  "requestId": "example-flood-0001",
+  "quoteId": "Q5817409",
+  "status": "quoted",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "carrier": {
+    "name": "Reference Carrier (mock)",
+    "naic": "00000"
+  },
+  "product": {
+    "effectiveDate": "2026-10-01",
+    "termMonths": 12
+  },
+  "premium": {
+    "annual": 2639,
+    "fees": 25,
+    "taxes": 46.18,
+    "total": 2710.18,
+    "currency": "USD"
+  },
+  "payPlans": [
+    {
+      "code": "FULL",
+      "description": "Paid in full",
+      "downPayment": 2710.18,
+      "installmentAmount": 0,
+      "installments": 0
+    },
+    {
+      "code": "MO4",
+      "description": "4 pay",
+      "downPayment": 677.55,
+      "installmentAmount": 677.55,
+      "installments": 3
+    }
+  ],
+  "coverages": {
+    "building": 250000,
+    "contents": 50000,
+    "deductible": 1250
+  },
+  "messages": [
+    {
+      "severity": "info",
+      "code": "RATE.FLOOD.PREFIRM",
+      "text": "Pre-FIRM construction surcharge applied.",
+      "field": "property.yearBuilt"
+    }
+  ],
+  "expiresAt": "2026-09-24T18:40:52.615Z",
+  "documents": []
+}

@@ -1,0 +1,6 @@
+# Normalise line endings: LF in the repo, native on checkout where it matters.
+# Without this, Windows contributors generate CRLF-noise diffs on every file.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary

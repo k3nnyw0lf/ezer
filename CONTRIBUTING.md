@@ -8,7 +8,7 @@ completely valid contribution — arguably the most valuable one.
 ## Getting started
 
 ```bash
-git clone <this repo>
+git clone https://github.com/k3nnyw0lf/ezer.git
 cd ezer
 
 node mock-carrier/server.js        # terminal 1
@@ -106,5 +106,5 @@ about 40 lines of plain Node at the bottom of that file — no framework to lear
 
 ## Code of conduct
 
-Be decent. Assume good faith. This is a small project run by people with day jobs, so reviews may
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The short version: be decent, assume good faith. This is a small project run by people with day jobs, so reviews may
 take a few days.

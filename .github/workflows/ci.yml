@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Zero dependencies: no install step, by design.
+      - name: Client test suite
+        run: node client/test/run.js
+      - name: Conformance suite against the reference carrier
+        shell: bash
+        run: |
+          node mock-carrier/server.js --port 8787 &
+          MOCK_PID=$!
+          for i in $(seq 1 50); do
+            curl -sf http://localhost:8787/health >/dev/null && break
+            sleep 0.2
+          done
+          node conformance/quote.js
+          node conformance/conformance.js
+          kill $MOCK_PID

@@ -16,6 +16,17 @@ const { redactUrl } = require('./redact');
  *     way to avoid leaking a body is to never log it.
  */
 
+// A single environment variable (NODE_TLS_REJECT_UNAUTHORIZED=0) silently turns
+// off certificate validation for the whole process. This client carries carrier
+// credentials, so that is not a configuration - it is a refusal condition, and
+// it is what lets SECURITY.md claim certificate validation is always on.
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+  throw new Error(
+    'Refusing to start: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS certificate validation, '
+    + 'and this client sends carrier credentials. Unset it.',
+  );
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 2;
 

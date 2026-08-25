@@ -9,12 +9,12 @@
  *
  *   # against the bundled reference carrier
  *   node mock-carrier/server.js        # in another terminal
- *   node client/conformance.js
+ *   node conformance/conformance.js
  *
  *   # against your sandbox
  *   CARRIER_BASE_URL=https://sandbox.example-carrier.com \
  *   CLIENT_ID=... CLIENT_SECRET=... AGENCY_CODE=... \
- *   node client/conformance.js
+ *   node conformance/conformance.js
  *
  * Exit code is 0 when every required check passes, 1 otherwise, so this can sit in CI.
  *
@@ -292,7 +292,131 @@ async function run() {
     `Got HTTP ${missing.status}. Field-level errors cut our integration time and your support load.`,
   );
 
+  await multiLineChecks();
+
   return finish();
+}
+
+
+// ---------------------------------------------------------------------------
+// 8 - multi-line: one envelope for different kinds of insurance
+//
+// A carrier is NOT required to implement every line. A 422 whose description
+// says the line is not implemented is an honest capability answer and records
+// as a skip. But any line the carrier DOES rate must speak the same envelope,
+// and the referred/declined outcomes must arrive as HTTP 200.
+// ---------------------------------------------------------------------------
+
+function lineRisk(lob, overrides = {}) {
+  const base = {
+    requestId: `conformance-${lob}-${Date.now()}`,
+    agency: { agencyCode: AGENCY_CODE },
+    applicant: { firstName: 'Test', lastName: 'Applicant', dateOfBirth: '1986-11-16' },
+    product: { lineOfBusiness: lob, effectiveDate: '2026-10-01' },
+  };
+  return deepMerge(base, overrides);
+}
+
+const LINE_SAMPLES = [
+  {
+    lob: 'FLOOD',
+    quoted: lineRisk('FLOOD', {
+      property: { address: { line1: '1 Main St', state: 'FL', postalCode: '34102' }, yearBuilt: 1990 },
+      coverages: { building: 250000, contents: 50000 },
+      flood: { zone: 'AE', elevationCertificate: true },
+    }),
+    outcome: {
+      name: 'FLOOD: a V-zone without an elevation certificate is HTTP 200 status=referred',
+      risk: lineRisk('FLOOD', {
+        property: { address: { line1: '1 Main St', state: 'FL', postalCode: '34102' }, yearBuilt: 2000 },
+        coverages: { building: 500000 },
+        flood: { zone: 'VE', elevationCertificate: false },
+      }),
+      expect: ['referred'],
+    },
+  },
+  {
+    lob: 'LIFE',
+    quoted: lineRisk('LIFE', {
+      product: { formType: 'TERM', termMonths: 240 },
+      coverages: { faceAmount: 500000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'FL' },
+    }),
+    outcome: {
+      name: 'LIFE: an age-71 applicant on a 30-year term is HTTP 200 status=declined',
+      risk: lineRisk('LIFE', {
+        applicant: { lastName: 'Applicant', dateOfBirth: '1955-01-01' },
+        product: { formType: 'TERM', termMonths: 360 },
+        coverages: { faceAmount: 250000 },
+        life: { sex: 'FEMALE', tobaccoUse: false, state: 'FL' },
+      }),
+      expect: ['declined', 'referred'],
+    },
+  },
+  {
+    lob: 'COMMERCIAL',
+    quoted: lineRisk('COMMERCIAL', {
+      product: { formType: 'BOP' },
+      business: { name: 'Example Roofing LLC', annualRevenue: 750000, employees: 6, yearsInBusiness: 4 },
+      property: { address: { line1: '2 Trade St', state: 'FL', postalCode: '34104' } },
+      coverages: { bpp: 50000 },
+    }),
+    outcome: null,
+  },
+];
+
+function isNotImplemented(resp) {
+  return resp.status === 422 && /not implemented|does not (rate|support)|rates [A-Z, ]+\./i.test(
+    resp.json?.error_description || '',
+  );
+}
+
+async function multiLineChecks() {
+  console.log('\n  --- multi-line (implemented lines must speak the same envelope) ---');
+
+  for (const sample of LINE_SAMPLES) {
+    const resp = await call('/quote', { body: sample.quoted, auth: token });
+
+    if (isNotImplemented(resp)) {
+      record(
+        `${sample.lob}: line implemented`,
+        'ADVISORY',
+        true,
+        'Skipped - carrier answered honestly that it does not rate this line. Not a failure.',
+      );
+      continue;
+    }
+
+    const ok = resp.status === 200 && resp.json;
+    record(`${sample.lob}: a valid quote request returns HTTP 200`, 'REQUIRED', !!ok,
+      ok ? '' : `HTTP ${resp.status}: ${(resp.text || '').slice(0, 200)}`);
+    if (!ok) continue;
+
+    const q = resp.json;
+    record(`${sample.lob}: envelope carries quoteId, valid status, messages[]`,
+      'REQUIRED',
+      typeof q.quoteId === 'string' && ['quoted', 'referred', 'declined'].includes(q.status) && Array.isArray(q.messages),
+      `status=${q.status} messages=${Array.isArray(q.messages) ? q.messages.length : 'ABSENT'} - the SAME shape as HO, which is the point of the contract.`);
+    if (q.status === 'quoted') {
+      record(`${sample.lob}: premium.annual is a number`,
+        'REQUIRED', typeof q.premium?.annual === 'number',
+        typeof q.premium?.annual === 'number' ? `annual=${q.premium.annual}` : 'premium absent or non-numeric on a quoted response');
+    }
+
+    if (sample.outcome) {
+      const o = await call('/quote', { body: sample.outcome.risk, auth: token });
+      const good = o.status === 200 && sample.outcome.expect.includes(o.json?.status);
+      record(sample.outcome.name, 'REQUIRED', good,
+        good
+          ? `status=${o.json.status}`
+          : `Got HTTP ${o.status} status=${o.json?.status}. Underwriting outcomes are HTTP 200 with status + messages, never transport errors.`);
+      if (o.status === 200 && o.json && sample.outcome.expect.includes(o.json.status)) {
+        record(`${sample.lob}: the ${o.json.status} outcome carries a human-readable reason`,
+          'REQUIRED', Array.isArray(o.json.messages) && o.json.messages.some((m) => m && m.text),
+          'The agent needs the reason to fix the risk or place it elsewhere.');
+      }
+    }
+  }
 }
 
 function finish() {
@@ -307,7 +431,10 @@ function finish() {
   if (failedRequired.length) {
     console.log('\n  Blocking issues:');
     for (const f of failedRequired) console.log(`    - ${f.name}`);
-    console.log('\n  Send this output to agent@example-agency.com and we will work through it.');
+    const contact = process.env.CONTACT_EMAIL;
+    console.log(contact
+      ? `\n  Send this output to ${contact} and we will work through it.`
+      : '\n  Send this output back to the agency that shared this kit and they will work through it with you.');
     console.log('-'.repeat(72) + '\n');
     process.exitCode = 1;
     return;

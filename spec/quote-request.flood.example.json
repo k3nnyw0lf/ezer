@@ -1,0 +1,31 @@
+{
+  "requestId": "example-flood-0001",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "product": {
+    "lineOfBusiness": "FLOOD",
+    "effectiveDate": "2026-10-01"
+  },
+  "applicant": {
+    "firstName": "Test",
+    "lastName": "Applicant"
+  },
+  "property": {
+    "address": {
+      "line1": "1 Main St",
+      "city": "Naples",
+      "state": "FL",
+      "postalCode": "34102"
+    },
+    "yearBuilt": 1968
+  },
+  "coverages": {
+    "building": 250000,
+    "contents": 50000
+  },
+  "flood": {
+    "zone": "AE",
+    "elevationCertificate": false
+  }
+}

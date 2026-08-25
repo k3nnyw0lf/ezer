@@ -2,21 +2,23 @@
 'use strict';
 
 /**
- * Agency client — the minimal, complete example of how Demo Agency A calls a carrier.
+ * Demo client - quotes FOUR different kinds of insurance through one contract
+ * and prints the four response envelopes side by side. This is the point of
+ * EZer in one run: the risk blocks differ per line, the envelope never does.
  *
  * Requires Node 18+. No dependencies, no install step.
  *
  *   # against the bundled reference carrier
  *   node mock-carrier/server.js        # in another terminal
- *   node client/quote.js
+ *   node conformance/quote.js
  *
- *   # against your sandbox
+ *   # against your sandbox (quotes whatever lines you implement; 422s are reported, not fatal)
  *   CARRIER_BASE_URL=https://sandbox.example-carrier.com \
  *   CLIENT_ID=... CLIENT_SECRET=... AGENCY_CODE=... \
- *   node client/quote.js
+ *   node conformance/quote.js
  *
- * Credentials come from the environment, injected at call time from our credential vault.
- * They are never written to source, logs, or disk. See SECURITY.md.
+ * Credentials come from the environment, injected at call time from a credential
+ * vault. They are never written to source, logs, or disk. See SECURITY.md.
  */
 
 const BASE = (process.env.CARRIER_BASE_URL || 'http://localhost:8787').replace(/\/+$/, '');
@@ -35,7 +37,6 @@ async function getToken() {
       agency_code: AGENCY_CODE,
     }),
   });
-
   const body = await res.json().catch(() => null);
   if (!res.ok || !body?.access_token) {
     throw new Error(`Auth failed (HTTP ${res.status}): ${JSON.stringify(body)}`);
@@ -43,119 +44,108 @@ async function getToken() {
   return body.access_token;
 }
 
-async function getQuote(token, risk) {
-  const res = await fetch(`${BASE}/quote`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify(risk),
-  });
-
-  const body = await res.json().catch(() => null);
-
-  // Transport and auth failures are the ONLY things that should arrive as non-2xx.
-  if (!res.ok) {
-    throw new Error(`Quote call failed (HTTP ${res.status}): ${JSON.stringify(body)}`);
-  }
-  return body;
-}
-
-const RISK = {
-  requestId: `wolf-${Date.now()}`,
-  agency: { agencyCode: AGENCY_CODE, producerNPN: '12345678', licenseNumber: 'AB123456' },
-  product: { lineOfBusiness: 'HO', formType: 'HO3', effectiveDate: '2026-10-01', termMonths: 12 },
-  applicant: {
-    firstName: 'Test',
-    lastName: 'Applicant',
-    dateOfBirth: '1980-05-14',
-    email: 'agent@example-agency.com',
-    phone: '2395550147',
-  },
-  property: {
-    address: { line1: '1100 5th Ave S', city: 'Naples', state: 'FL', postalCode: '34102', county: 'Collier' },
-    yearBuilt: 2005,
-    constructionType: 'MASONRY',
-    roofYear: 2019,
-    roofType: 'ARCHITECTURAL_SHINGLE',
-    squareFeet: 2100,
-    stories: 1,
-    occupancy: 'OWNER',
-    usage: 'PRIMARY',
-    protectionClass: '3',
-    distanceToCoastMiles: 2.4,
-    floodZone: 'X',
-    priorClaims: [],
-  },
-  coverages: { covA: 450000, allOtherPerilsDeductible: 2500, hurricaneDeductible: '2%' },
-  mitigation: {
-    openingProtection: 'ALL',
-    roofDeckAttachment: 'B',
-    roofWallConnection: 'DOUBLE_WRAPS',
-    secondaryWaterResistance: true,
-  },
-  creditConsent: true,
+const common = {
+  agency: { agencyCode: AGENCY_CODE },
+  applicant: { firstName: 'Test', lastName: 'Applicant', dateOfBirth: '1986-11-16' },
 };
+
+const RISKS = [
+  {
+    label: 'HO       homeowners, HO3, Naples FL',
+    risk: {
+      ...common,
+      product: { lineOfBusiness: 'HO', formType: 'HO3', effectiveDate: '2026-10-01', termMonths: 12 },
+      property: {
+        address: { line1: '1100 5th Ave S', city: 'Naples', state: 'FL', postalCode: '34102' },
+        yearBuilt: 2005, constructionType: 'MASONRY', roofYear: 2019,
+        occupancy: 'OWNER', usage: 'PRIMARY', distanceToCoastMiles: 2.4, priorClaims: [],
+      },
+      coverages: { covA: 450000, allOtherPerilsDeductible: 2500, hurricaneDeductible: '2%' },
+      mitigation: { openingProtection: 'ALL', secondaryWaterResistance: true },
+      creditConsent: true,
+    },
+  },
+  {
+    label: 'FLOOD    AE zone, pre-FIRM building',
+    risk: {
+      ...common,
+      product: { lineOfBusiness: 'FLOOD', effectiveDate: '2026-10-01' },
+      property: { address: { line1: '1100 5th Ave S', state: 'FL', postalCode: '34102' }, yearBuilt: 1968 },
+      coverages: { building: 250000, contents: 50000 },
+      flood: { zone: 'AE', elevationCertificate: false },
+    },
+  },
+  {
+    label: 'LIFE     30-year term, $500k face',
+    risk: {
+      ...common,
+      product: { lineOfBusiness: 'LIFE', formType: 'TERM', effectiveDate: '2026-10-01', termMonths: 360 },
+      coverages: { faceAmount: 500000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'FL' },
+    },
+  },
+  {
+    label: 'COMMERCIAL  BOP, roofing contractor',
+    risk: {
+      ...common,
+      product: { lineOfBusiness: 'COMMERCIAL', formType: 'BOP', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Roofing LLC', annualRevenue: 750000, employees: 6, yearsInBusiness: 4 },
+      property: { address: { line1: '2 Trade St', state: 'FL', postalCode: '34104' } },
+      coverages: { bpp: 50000 },
+    },
+  },
+];
 
 function money(n) {
   return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : String(n);
 }
 
 (async () => {
-  console.log(`\nQuoting against ${BASE} as agency ${AGENCY_CODE}\n`);
+  console.log(`\nQuoting against ${BASE} as agency ${AGENCY_CODE}`);
+  console.log('Four kinds of insurance, one contract, one response envelope.\n');
 
   const token = await getToken();
-  const q = await getQuote(token, RISK);
 
-  console.log(`  quoteId   ${q.quoteId}`);
-  console.log(`  status    ${q.status}`);
+  for (const { label, risk } of RISKS) {
+    const res = await fetch(`${BASE}/quote`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ requestId: `demo-${risk.product.lineOfBusiness}-${Date.now()}`, ...risk }),
+    });
+    const q = await res.json().catch(() => null);
 
-  // ---------------------------------------------------------------------
-  // Read `status` first, and ALWAYS read `messages`. A carrier can return
-  // HTTP 200 with a valid quote ID while the real underwriting decision
-  // sits in the messages array. We check both, every time.
-  // ---------------------------------------------------------------------
-  if (Array.isArray(q.messages) && q.messages.length) {
-    console.log('\n  Messages:');
-    for (const m of q.messages) {
-      const field = m.field ? ` (${m.field})` : '';
-      console.log(`    [${String(m.severity || 'info').toUpperCase()}] ${m.code}${field}: ${m.text}`);
+    console.log('-'.repeat(64));
+    console.log(`  ${label}`);
+
+    if (!res.ok) {
+      // A 422 naming an unimplemented line is an honest answer, not a failure.
+      console.log(`  HTTP ${res.status}: ${q?.error_description || q?.error || 'no body'}`);
+      continue;
+    }
+
+    // Identical handling for every line - this loop body IS the demo.
+    console.log(`  quoteId   ${q.quoteId}`);
+    console.log(`  status    ${q.status}`);
+    if (Array.isArray(q.messages) && q.messages.length) {
+      for (const m of q.messages) {
+        console.log(`  [${String(m.severity || 'info').toUpperCase()}] ${m.code}: ${m.text}`);
+      }
+    }
+    if (q.premium) {
+      console.log(`  premium   ${money(q.premium.annual)} annual, ${money(q.premium.total)} total`);
+    } else if (q.status === 'referred') {
+      console.log('  premium   pending underwriter review');
     }
   }
 
-  if (q.status === 'declined') {
-    console.log('\n  DECLINED. Not eligible. Placing this risk elsewhere.\n');
-    return;
-  }
-
-  if (q.premium) {
-    console.log('\n  Premium:');
-    console.log(`    annual  ${money(q.premium.annual)}`);
-    console.log(`    fees    ${money(q.premium.fees)}`);
-    console.log(`    taxes   ${money(q.premium.taxes)}`);
-    console.log(`    total   ${money(q.premium.total)}`);
-  }
-
-  if (q.coverages) {
-    console.log('\n  Coverages as rated by the carrier:');
-    for (const [k, v] of Object.entries(q.coverages)) {
-      const requested = RISK.coverages[k];
-      const changed = requested != null && String(requested) !== String(v);
-      console.log(`    ${k.padEnd(28)} ${v}${changed ? `   <- we requested ${requested}` : ''}`);
-    }
-  }
-
-  if (Array.isArray(q.payPlans) && q.payPlans.length) {
-    console.log('\n  Pay plans:');
-    for (const p of q.payPlans) {
-      console.log(`    ${p.code.padEnd(6)} ${p.description} — down ${money(p.downPayment)}, ${p.installments} x ${money(p.installmentAmount)}`);
-    }
-  }
-
-  if (q.status === 'referred') {
-    console.log('\n  REFERRED. Premium is indicative until an underwriter releases it.');
-  }
-
-  console.log('');
+  console.log('-'.repeat(64));
+  console.log('\nSame status/messages/premium handling for every line. That is the contract.\n');
 })().catch((err) => {
-  console.error(`\n  ${err.message}\n`);
+  const code = err.cause?.code || '';
+  console.error(`\n  ${err.message}${code ? ` (${code})` : ''}`);
+  if (code === 'ECONNREFUSED' || /fetch failed/i.test(err.message)) {
+    console.error(`  Could not reach ${BASE} - is the mock carrier running? (node mock-carrier/server.js)`);
+  }
+  console.error('');
   process.exitCode = 1;
 });

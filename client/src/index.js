@@ -17,7 +17,7 @@ const builtIn = require('./adapters');
  *
  *   const client = createClient({ secrets: 'supabase' });
  *   const results = await client.quoteAll(risk);          // every configured carrier, in parallel
- *   const one     = await client.quote('slide', risk);    // a single carrier
+ *   const one     = await client.quote('ezer', risk);     // a single carrier
  */
 
 function createClient({

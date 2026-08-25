@@ -1,0 +1,53 @@
+{
+  "requestId": "example-life-0001",
+  "quoteId": "Q4269056",
+  "status": "quoted",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "carrier": {
+    "name": "Reference Carrier (mock)",
+    "naic": "00000"
+  },
+  "product": {
+    "formType": "TERM",
+    "effectiveDate": "2026-10-01",
+    "termMonths": 360
+  },
+  "premium": {
+    "annual": 705,
+    "fees": 25,
+    "taxes": 12.34,
+    "total": 742.34,
+    "currency": "USD"
+  },
+  "payPlans": [
+    {
+      "code": "FULL",
+      "description": "Paid in full",
+      "downPayment": 742.34,
+      "installmentAmount": 0,
+      "installments": 0
+    },
+    {
+      "code": "MO4",
+      "description": "4 pay",
+      "downPayment": 185.59,
+      "installmentAmount": 185.59,
+      "installments": 3
+    }
+  ],
+  "coverages": {
+    "faceAmount": 500000
+  },
+  "messages": [
+    {
+      "severity": "info",
+      "code": "RATE.LIFE.CLASS.DEFAULT",
+      "text": "No health class supplied; rated STANDARD.",
+      "field": "life.healthClass"
+    }
+  ],
+  "expiresAt": "2026-09-24T18:40:52.676Z",
+  "documents": []
+}

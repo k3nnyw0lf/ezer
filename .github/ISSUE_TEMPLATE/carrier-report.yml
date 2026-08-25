@@ -1,0 +1,51 @@
+name: Carrier conformance report
+description: You ran the conformance suite against a carrier or MGA sandbox — this is the project's most-wanted contribution.
+title: "[carrier] "
+labels: [carrier-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — real carrier behaviour is the most valuable thing anyone can contribute here.
+        **Redact anything sensitive**: base URLs can be shortened to the host, credentials must
+        never appear, and quote IDs are fine.
+  - type: input
+    id: carrier
+    attributes:
+      label: Carrier / MGA
+      placeholder: e.g. Example Mutual, via their agent sandbox
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Sandbox
+        - Production (they had no sandbox)
+        - Their spec only (no endpoint access yet)
+    validations:
+      required: true
+  - type: input
+    id: lines
+    attributes:
+      label: Lines of business exercised
+      placeholder: e.g. HO only / HO + FLOOD
+  - type: textarea
+    id: output
+    attributes:
+      label: Conformance output
+      description: Paste the full output of `node conformance/conformance.js` (it contains no secrets by design).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: surprises
+    attributes:
+      label: What surprised you
+      description: Anything the suite did not catch, carrier behaviour the contract cannot express, or a check you think is wrong.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Contract change proposed (if any)
+      description: If this carrier's behaviour suggests the contract itself should change, say how.

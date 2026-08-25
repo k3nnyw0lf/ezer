@@ -1,5 +1,7 @@
 # EZer
 
+[![ci](https://github.com/k3nnyw0lf/ezer/actions/workflows/ci.yml/badge.svg)](https://github.com/k3nnyw0lf/ezer/actions/workflows/ci.yml)
+
 **An open contract, reference implementation, and client for agency-direct insurance quoting.**
 
 Independent agencies can already quote carriers programmatically — but only by going through a
@@ -38,7 +40,7 @@ EZer exists to make that ask concrete, cheap to evaluate, and safe to say yes to
 | Directory | What it is |
 |---|---|
 | `spec/` | The contract. OpenAPI, request/response examples, and a JSON↔ACORD field mapping so a carrier's team recognises every field. |
-| `mock-carrier/` | A working reference carrier. Run it to see the contract behave, or diff it against your own implementation. |
+| `mock-carrier/` | A working reference carrier that rates **four lines** (HO, flood, life, commercial) through the one response envelope — quoted, referred and declined outcomes all exercised. Run it to see the contract behave, or diff it against your own implementation. |
 | `conformance/` | **Point it at your sandbox and it tells you whether you conform.** Exit code 0 or 1, so it fits in CI. |
 | `client/` | A secure, carrier-agnostic quoting client. Adding a carrier is a config file, not code. |
 | `PILOT.md` | A one-page proposal an agency can forward to a carrier. |
@@ -135,6 +137,11 @@ Each declares its own required fields and risk blocks (`flood`, `vehicles`/`driv
 The response shape — `status`, `messages`, `premium`, `coverages` — is deliberately identical across
 every line, so comparison and ranking code never changes.
 
+The reference carrier demonstrates four of these end to end (HO, flood, life, commercial —
+quoted, referred and declined outcomes all reachable); the other seven validate client-side and
+422 cleanly at the mock, naming what it does implement. `node conformance/quote.js` prints the
+four envelopes side by side.
+
 The HEALTH and LIFE definitions were drafted and then **adversarially reviewed before landing**;
 the reviews rejected the first drafts and the published versions carry the fixes — for example,
 LIFE's term length is any multiple of 12 months rather than a closed enum (35- and 40-year terms
@@ -176,8 +183,8 @@ solo one.
   will contain errors. Corrections very welcome.
 - **Carrier and MGA engineers.** If this contract would be annoying to implement, say so in an
   issue. It is far cheaper to fix now than after anyone builds against it.
-- **Line-of-business review.** The contract now covers HO, flood, auto, commercial and travel as a
-  registry — `registerLine()` adds a new kind of insurance without forking. The definitions were
+- **Line-of-business review.** The contract now covers eleven kinds of insurance as a registry
+  (see the list above) — `registerLine()` adds another without forking. The definitions were
   written by an agency that writes these lines, not by a standards committee; if you underwrite
   them, review the required fields and tell us what is wrong.
 - **Security review.** The redaction and secret-handling code is the part where a mistake actually
@@ -187,8 +194,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs both fine; no CLA, no cer
 
 ## Status
 
-Early and honest about it. The contract runs end to end against the reference carrier, the client
-passes its suite, and no carrier has yet adopted it. That is the point of publishing.
+Early and honest about it. The contract runs end to end against the reference carrier (which rates
+four of the eleven lines), the client passes its suite, and no carrier has yet adopted it. That is the point of publishing.
 
 ## Author
 

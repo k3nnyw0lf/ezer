@@ -1,4 +1,19 @@
-# Security posture
+# Security
+
+## Reporting a vulnerability
+
+**Do not open a public issue for a vulnerability.** Email **ken@wolfsurety.com** with the details.
+You will get a reply within 3 business days; real findings get fixed and credited (unless you
+prefer otherwise).
+
+Highest-value targets are the credential path: `client/src/core/redact.js`, `secrets.js`, and
+`http.js`. Things worth attacking: getting a secret past `redact()` into a log, making the client
+send a credential over plaintext, crashing it badly with a malformed carrier response, or crafting
+an adapter config that exfiltrates a secret to an attacker-controlled host.
+
+---
+
+# Agency security posture
 
 **Wolf Insurance · Wolf Surety Inc · FL license W774471 · Agency L115998 · NPN 20187300**
 

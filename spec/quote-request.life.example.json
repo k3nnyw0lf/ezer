@@ -1,0 +1,25 @@
+{
+  "requestId": "example-life-0001",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "product": {
+    "lineOfBusiness": "LIFE",
+    "formType": "TERM",
+    "effectiveDate": "2026-10-01",
+    "termMonths": 360
+  },
+  "applicant": {
+    "firstName": "Test",
+    "lastName": "Applicant",
+    "dateOfBirth": "1986-11-16"
+  },
+  "coverages": {
+    "faceAmount": 500000
+  },
+  "life": {
+    "sex": "MALE",
+    "tobaccoUse": false,
+    "state": "FL"
+  }
+}

@@ -175,7 +175,11 @@ components:
 
     Address:
       type: object
-      required: [line1, city, state, postalCode]
+      required: []
+      description: |
+        Required-ness is line- and country-dependent: US risks need state + postalCode
+        (validated exactly); non-US need postalCode in local format. line1 is required for
+        HO/FLOOD, optional for HOME_WARRANTY and AUTO garaging. city is never required.
       properties:
         line1: { type: string }
         line2: { type: string }
@@ -200,6 +204,51 @@ components:
             - type: number
           description: Percentage as a string ("2%") or a flat dollar amount.
           example: "2%"
+        building:
+          type: number
+          description: "FLOOD line: building limit. building or contents required."
+        contents:
+          type: number
+          description: "FLOOD line: contents limit."
+        faceAmount:
+          type: integer
+          description: "LIFE line: death benefit, whole USD, >= 1000. Required."
+        limit:
+          type: integer
+          description: "UMBRELLA line: required; any positive multiple of 1000000."
+        selfInsuredRetention:
+          type: number
+          description: "UMBRELLA line: PERSONAL_UMBRELLA only (EXCESS is follow-form)."
+        planId:
+          type: string
+          description: |
+            HEALTH line: HIOS/CMS contract-plan id pinning ONE plan. Without it the engine
+            MUST return its lowest-premium qualifying plan and say so in messages, so two
+            implementations never return incomparable numbers.
+        planLetter:
+          type: string
+          description: "HEALTH line: Medigap plan letter. Required for MEDIGAP, invalid elsewhere."
+        metalTier:
+          type: string
+          enum: [BRONZE, SILVER, GOLD, PLATINUM, CATASTROPHIC]
+          description: "HEALTH line: optional ACA filter; invalid on other formTypes."
+        glOccurrence:
+          type: number
+          description: "COMMERCIAL line: GL per-occurrence limit."
+        glAggregate:
+          type: number
+          description: "COMMERCIAL line: GL aggregate limit."
+        bpp:
+          type: number
+          description: "COMMERCIAL line: business personal property limit."
+        liability:
+          type: object
+          description: "AUTO / RECREATIONAL lines. combinedSingleLimit is mutually exclusive with split limits."
+          properties:
+            bodilyInjuryPerPerson: { type: number }
+            bodilyInjuryPerAccident: { type: number }
+            propertyDamage: { type: number }
+            combinedSingleLimit: { type: number }
 
     Mitigation:
       type: object
@@ -254,7 +303,7 @@ components:
             formType:
               type: string
               description: |
-                Line-specific product code. HO: HO3, HO4, HO6, DP1, DP3 (enforced).
+                Line-specific product code. HO: HO3, HO4, HO6, DP1, DP3, MHO3, MDP1 (enforced; MHO3/MDP1 = manufactured home).
                 COMMERCIAL: BOP, GL, WC, PROP, ... (carrier vocabulary). FLOOD/AUTO/TRAVEL:
                 optional or carrier-specific.
               example: HO3
@@ -271,11 +320,19 @@ components:
             phone: { type: string }
         property:
           type: object
-          required: [address, yearBuilt, constructionType]
+          required: [address]
+          description: |
+            yearBuilt and constructionType are required for HO (and yearBuilt for FLOOD) per
+            the line registry, not universally - AUTO uses this block purely as the garaging
+            address, HOME_WARRANTY needs only state/ZIP/dwellingType.
           properties:
             address: { $ref: "#/components/schemas/Address" }
             yearBuilt: { type: integer, example: 2005 }
-            constructionType: { type: string, enum: [FRAME, MASONRY, MASONRY_VENEER, SUPERIOR] }
+            constructionType: { type: string, enum: [FRAME, MASONRY, MASONRY_VENEER, SUPERIOR, MANUFACTURED] }
+            dwellingType:
+              type: string
+              enum: [SFR, CONDO, TOWNHOME, MOBILE_HOME, MULTI_UNIT_2_4]
+              description: "HOME_WARRANTY line: required. Other lines ignore it."
             roofYear: { type: integer }
             roofType: { type: string }
             squareFeet: { type: integer }
@@ -379,9 +436,16 @@ components:
           type: object
           description: "Protective devices / discount features: burglarAlarm, fireAlarm, securedCommunity, waterLeakDetection. Universal, optional."
           additionalProperties: true
+        locations:
+          type: array
+          description: "COMMERCIAL multistate premises beyond property.address: [{ address, payroll, employees, bpp }]. Each entry's address.state is validated."
+          items: { type: object, additionalProperties: true }
         creditConsent:
           type: boolean
-          description: Whether the applicant consented to a credit-based insurance score.
+          description: |
+            Whether the applicant consented to credit-based rating. Universal. For SURETY,
+            true additionally requires applicant.dateOfBirth and bond.principalAddress
+            (the soft pull runs on the owner).
 
     QuoteResponse:
       type: object

@@ -1,0 +1,32 @@
+{
+  "requestId": "example-commercial-0001",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "product": {
+    "lineOfBusiness": "COMMERCIAL",
+    "formType": "BOP",
+    "effectiveDate": "2026-10-01"
+  },
+  "applicant": {
+    "firstName": "Test",
+    "lastName": "Applicant"
+  },
+  "business": {
+    "name": "Example Roofing LLC",
+    "annualRevenue": 750000,
+    "employees": 6,
+    "yearsInBusiness": 4
+  },
+  "property": {
+    "address": {
+      "line1": "2 Trade St",
+      "city": "Naples",
+      "state": "FL",
+      "postalCode": "34104"
+    }
+  },
+  "coverages": {
+    "bpp": 50000
+  }
+}

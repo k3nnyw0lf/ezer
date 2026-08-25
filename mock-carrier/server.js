@@ -43,17 +43,13 @@ const AGENCIES = {
     clientSecret: 'demo_secret_a',
     agencyCode: '1111111',
     agencyName: 'Demo Agency A',
-    scope: 'quote:ho',
-    states: ['FL'],
-    forms: ['HO3', 'HO6', 'DP3'],
+    scope: 'quote',
   },
   demo_client_b: {
     clientSecret: 'demo_secret_b',
     agencyCode: '2222222',
     agencyName: 'Demo Agency B',
-    scope: 'quote:ho',
-    states: ['FL'],
-    forms: ['HO3'],
+    scope: 'quote',
   },
 };
 
@@ -138,19 +134,187 @@ function newRequestId() {
 // rating — deterministic, illustrative only
 // ---------------------------------------------------------------------------
 
-const REQUIRED_FIELDS = [
-  ['product.formType', (b) => b?.product?.formType],
-  ['product.effectiveDate', (b) => b?.product?.effectiveDate],
-  ['applicant.lastName', (b) => b?.applicant?.lastName],
-  ['property.address.postalCode', (b) => b?.property?.address?.postalCode],
-  ['property.address.state', (b) => b?.property?.address?.state],
-  ['property.yearBuilt', (b) => b?.property?.yearBuilt],
-  ['property.constructionType', (b) => b?.property?.constructionType],
-  ['coverages.covA', (b) => b?.coverages?.covA],
-];
+// Required fields per line of business. The reference carrier rates FOUR lines
+// (HO, FLOOD, LIFE, COMMERCIAL) to demonstrate that one contract and one
+// response envelope really do cover different kinds of insurance - the premium
+// maths is deliberately fake, the shapes are the point.
+const REQUIRED_BY_LINE = {
+  HO: [
+    ['product.formType', (b) => b?.product?.formType],
+    ['product.effectiveDate', (b) => b?.product?.effectiveDate],
+    ['applicant.lastName', (b) => b?.applicant?.lastName],
+    ['property.address.postalCode', (b) => b?.property?.address?.postalCode],
+    ['property.address.state', (b) => b?.property?.address?.state],
+    ['property.yearBuilt', (b) => b?.property?.yearBuilt],
+    ['property.constructionType', (b) => b?.property?.constructionType],
+    ['coverages.covA', (b) => b?.coverages?.covA],
+  ],
+  FLOOD: [
+    ['product.effectiveDate', (b) => b?.product?.effectiveDate],
+    ['applicant.lastName', (b) => b?.applicant?.lastName],
+    ['property.address.postalCode', (b) => b?.property?.address?.postalCode],
+    ['property.yearBuilt', (b) => b?.property?.yearBuilt],
+    ['coverages.building or coverages.contents', (b) => b?.coverages?.building ?? b?.coverages?.contents],
+  ],
+  LIFE: [
+    ['product.formType', (b) => b?.product?.formType],
+    ['product.effectiveDate', (b) => b?.product?.effectiveDate],
+    ['applicant.lastName', (b) => b?.applicant?.lastName],
+    ['applicant.dateOfBirth', (b) => b?.applicant?.dateOfBirth],
+    ['coverages.faceAmount', (b) => b?.coverages?.faceAmount],
+    ['life.sex', (b) => b?.life?.sex],
+    ['life.state', (b) => b?.life?.state],
+  ],
+  COMMERCIAL: [
+    ['product.formType', (b) => b?.product?.formType],
+    ['product.effectiveDate', (b) => b?.product?.effectiveDate],
+    ['business.name', (b) => b?.business?.name],
+    ['property.address.state', (b) => b?.property?.address?.state],
+  ],
+};
 
 function currentYear() {
   return new Date().getUTCFullYear();
+}
+
+function ageAt(dobStr, whenStr) {
+  const dob = new Date(dobStr);
+  const when = new Date(whenStr || Date.now());
+  let age = when.getUTCFullYear() - dob.getUTCFullYear();
+  const m = when.getUTCMonth() - dob.getUTCMonth();
+  if (m < 0 || (m === 0 && when.getUTCDate() < dob.getUTCDate())) age -= 1;
+  return age;
+}
+
+function money(n) {
+  return Math.round(n * 100) / 100;
+}
+
+function envelope(status, messages, premiumAnnual, coverages, extra = {}) {
+  if (status === 'declined') {
+    return { status, messages, premium: null, coverages: null, payPlans: [], ...extra };
+  }
+  const annual = money(premiumAnnual);
+  const fees = 25;
+  const taxes = money(annual * 0.0175);
+  const total = money(annual + fees + taxes);
+  return {
+    status,
+    messages,
+    coverages,
+    premium: { annual, fees, taxes, total, currency: 'USD' },
+    payPlans: [
+      { code: 'FULL', description: 'Paid in full', downPayment: total, installmentAmount: 0, installments: 0 },
+      { code: 'MO4', description: '4 pay', downPayment: money(total * 0.25), installmentAmount: money(total * 0.25), installments: 3 },
+    ],
+    ...extra,
+  };
+}
+
+// --- FLOOD: building/contents split, zone multiplier, pre-FIRM surcharge ----
+function rateFlood(body) {
+  const messages = [];
+  const cov = { ...(body.coverages || {}) };
+  const flood = body.flood || {};
+  const building = Number(cov.building) || 0;
+  const contents = Number(cov.contents) || 0;
+
+  const zone = String(flood.zone || 'X').toUpperCase();
+  if (zone.startsWith('V') && !flood.elevationCertificate) {
+    return {
+      status: 'referred',
+      messages: [{
+        severity: 'warning',
+        code: 'UW.FLOOD.VZONE.EC',
+        text: `Zone ${zone} requires an elevation certificate before a firm premium; indicative rate only.`,
+        field: 'flood.elevationCertificate',
+      }],
+      coverages: cov,
+      premium: null,
+      payPlans: [],
+    };
+  }
+
+  let premium = building * 0.004 + contents * 0.009;
+  const zoneFactor = zone.startsWith('V') ? 2.2 : zone.startsWith('A') ? 1.4 : 0.6;
+  premium *= zoneFactor;
+  if (Number(body.property?.yearBuilt) < 1975) {
+    premium *= 1.3;
+    messages.push({ severity: 'info', code: 'RATE.FLOOD.PREFIRM', text: 'Pre-FIRM construction surcharge applied.', field: 'property.yearBuilt' });
+  }
+  if (cov.deductible == null) cov.deductible = 1250;
+  return envelope('quoted', messages, premium, cov);
+}
+
+// --- LIFE: age x face banding, tobacco, form multiplier ---------------------
+function rateLife(body) {
+  const messages = [];
+  const ft = String(body.product?.formType || 'TERM').toUpperCase();
+  const face = Number(body.coverages?.faceAmount) || 0;
+  const age = ageAt(body.applicant.dateOfBirth, body.product.effectiveDate);
+  const termYears = ft === 'TERM' ? (Number(body.product?.termMonths) || 240) / 12 : 0;
+
+  if (ft === 'TERM' && age + termYears > 80) {
+    return {
+      status: 'declined',
+      messages: [{
+        severity: 'error',
+        code: 'UW.LIFE.AGE.TERM',
+        text: `Issue age ${age} plus a ${termYears}-year term exceeds the maximum coverage age of 80.`,
+        field: 'product.termMonths',
+      }],
+      premium: null, coverages: null, payPlans: [],
+    };
+  }
+  if (ft === 'FINAL_EXPENSE' && (age < 45 || age > 85)) {
+    return {
+      status: 'declined',
+      messages: [{ severity: 'error', code: 'UW.LIFE.AGE.FE', text: `Final expense issues ages 45-85; applicant is ${age}.`, field: 'applicant.dateOfBirth' }],
+      premium: null, coverages: null, payPlans: [],
+    };
+  }
+
+  let perThousand = 0.6 + Math.max(0, age - 30) * 0.09;
+  if (body.life?.tobaccoUse === true) perThousand *= 2.1;
+  if (ft === 'WHOLE') perThousand *= 6;
+  if (ft === 'FINAL_EXPENSE') perThousand *= 8;
+  const healthClass = body.life?.healthClass || 'STANDARD';
+  if (healthClass === 'PREFERRED_PLUS') perThousand *= 0.8;
+  else if (healthClass === 'PREFERRED') perThousand *= 0.9;
+  else if (healthClass === 'SUBSTANDARD') perThousand *= 1.5;
+  if (!body.life?.healthClass) {
+    messages.push({ severity: 'info', code: 'RATE.LIFE.CLASS.DEFAULT', text: 'No health class supplied; rated STANDARD.', field: 'life.healthClass' });
+  }
+  return envelope('quoted', messages, (face / 1000) * perThousand, { faceAmount: face });
+}
+
+// --- COMMERCIAL: BOP / GL / WC on revenue, property and payroll -------------
+function rateCommercial(body) {
+  const messages = [];
+  const ft = String(body.product?.formType || '').toUpperCase();
+  const biz = body.business || {};
+  const cov = { ...(body.coverages || {}) };
+
+  if (ft === 'WC' && !(Number(biz.payroll) > 0)) {
+    return {
+      status: 'declined',
+      messages: [{ severity: 'error', code: 'UW.WC.PAYROLL', text: 'WC cannot rate without business.payroll.', field: 'business.payroll' }],
+      premium: null, coverages: null, payPlans: [],
+    };
+  }
+
+  let premium;
+  if (ft === 'WC') premium = Number(biz.payroll) * 0.025;
+  else if (ft === 'GL') premium = (Number(biz.annualRevenue) || 250000) * 0.0035;
+  else premium = (Number(biz.annualRevenue) || 250000) * 0.004 + (Number(cov.bpp) || 0) * 0.012 + (Number(biz.employees) || 1) * 35;
+
+  if (cov.glOccurrence == null && ft !== 'WC') cov.glOccurrence = 1_000_000;
+  if (cov.glAggregate == null && ft !== 'WC') cov.glAggregate = 2_000_000;
+  if ((Number(biz.yearsInBusiness) || 3) < 1) {
+    messages.push({ severity: 'warning', code: 'UW.COMM.NEWVENTURE', text: 'New venture surcharge applied.', field: 'business.yearsInBusiness' });
+    premium *= 1.25;
+  }
+  return envelope('quoted', messages, premium, cov);
 }
 
 function rate(body, agency) {
@@ -186,7 +350,7 @@ function rate(body, agency) {
     });
   }
 
-  if (!Array.isArray(body.forms) && !body.creditConsent) {
+  if (!body.creditConsent) {
     messages.push({
       severity: 'info',
       code: 'RATE.NOCREDIT',
@@ -335,7 +499,19 @@ async function handleQuote(req, res) {
     });
   }
 
-  const missing = REQUIRED_FIELDS.filter(([, get]) => {
+  const lob = String(body?.product?.lineOfBusiness || 'HO').toUpperCase();
+  const requiredFields = REQUIRED_BY_LINE[lob];
+  if (!requiredFields) {
+    return send(res, 422, {
+      error: 'validation_failed',
+      error_description: `This reference carrier rates ${Object.keys(REQUIRED_BY_LINE).join(', ')}. ` +
+        `Line "${lob}" is valid in the contract but not implemented here.`,
+      requestId,
+      fields: ['product.lineOfBusiness'],
+    });
+  }
+
+  const missing = requiredFields.filter(([, get]) => {
     const v = get(body);
     return v === undefined || v === null || v === '';
   }).map(([name]) => name);
@@ -349,7 +525,11 @@ async function handleQuote(req, res) {
     });
   }
 
-  const result = rate(body, claims);
+  // One response envelope, four different kinds of insurance - that is the demo.
+  const result = lob === 'FLOOD' ? rateFlood(body)
+    : lob === 'LIFE' ? rateLife(body)
+    : lob === 'COMMERCIAL' ? rateCommercial(body)
+    : rate(body, claims);
   const expiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
 
   // Underwriting outcome is ALWAYS HTTP 200. Read `status`, and always read `messages`.
@@ -390,6 +570,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use - try: node mock-carrier/server.js --port ${PORT + 1}`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   console.log(`Reference carrier listening on http://localhost:${PORT}`);
   console.log('');
@@ -397,6 +585,6 @@ server.listen(PORT, () => {
   console.log('    client_id=demo_client_a  client_secret=demo_secret_a  agency_code=1111111');
   console.log('    client_id=demo_client_b client_secret=demo_secret_b agency_code=2222222');
   console.log('');
-  console.log('  Try:  node client/quote.js');
-  console.log('  Test: node client/conformance.js');
+  console.log('  Try:  node conformance/quote.js');
+  console.log('  Test: node conformance/conformance.js');
 });

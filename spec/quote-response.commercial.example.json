@@ -1,0 +1,48 @@
+{
+  "requestId": "example-commercial-0001",
+  "quoteId": "Q7519519",
+  "status": "quoted",
+  "agency": {
+    "agencyCode": "1111111"
+  },
+  "carrier": {
+    "name": "Reference Carrier (mock)",
+    "naic": "00000"
+  },
+  "product": {
+    "formType": "BOP",
+    "effectiveDate": "2026-10-01",
+    "termMonths": 12
+  },
+  "premium": {
+    "annual": 3810,
+    "fees": 25,
+    "taxes": 66.68,
+    "total": 3901.68,
+    "currency": "USD"
+  },
+  "payPlans": [
+    {
+      "code": "FULL",
+      "description": "Paid in full",
+      "downPayment": 3901.68,
+      "installmentAmount": 0,
+      "installments": 0
+    },
+    {
+      "code": "MO4",
+      "description": "4 pay",
+      "downPayment": 975.42,
+      "installmentAmount": 975.42,
+      "installments": 3
+    }
+  ],
+  "coverages": {
+    "bpp": 50000,
+    "glOccurrence": 1000000,
+    "glAggregate": 2000000
+  },
+  "messages": [],
+  "expiresAt": "2026-09-24T18:40:52.706Z",
+  "documents": []
+}

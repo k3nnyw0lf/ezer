@@ -1,7 +1,12 @@
 # Field mapping — JSON ↔ ACORD personal lines
 
 The JSON contract in this kit is deliberately a thin renaming of the ACORD personal-lines elements
-your rating service already consumes. This table exists so your team can recognise the fields
+your rating service already consumes.
+
+> **Scope:** this mapping covers the HO (homeowners/dwelling) line, where ACORD personal-lines
+> vocabulary applies most directly. Other lines' blocks (flood, life, bond, units, ...) use
+> neutral names documented in the OpenAPI spec; mappings for those lines are welcome
+> contributions. Agency identifiers below are placeholders. This table exists so your team can recognise the fields
 immediately, and so you can tell us "just send ACORD" if that is cheaper for you.
 
 **If you already accept ACORD XML from your rater, we will send ACORD XML.** JSON is offered because
@@ -28,7 +33,7 @@ it is usually cheaper for both sides, not because it is required.
 | `property.address.postalCode` | `Addr/PostalCode` | |
 | `property.address.county` | `Addr/County` | |
 | `property.yearBuilt` | `Dwell/Construction/YearBuilt` | |
-| `property.constructionType` | `Dwell/Construction/ConstructionCd` | FRAME / MASONRY / MASONRY_VENEER / SUPERIOR |
+| `property.constructionType` | `Dwell/Construction/ConstructionCd` | FRAME / MASONRY / MASONRY_VENEER / SUPERIOR / MANUFACTURED |
 | `property.roofYear` | `Dwell/Construction/RoofingMaterial/YearBuilt` | |
 | `property.roofType` | `Dwell/Construction/RoofingMaterial/RoofMaterialCd` | |
 | `property.squareFeet` | `Dwell/Construction/FloorArea/NumUnits` | |
