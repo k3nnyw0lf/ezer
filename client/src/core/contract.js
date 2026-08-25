@@ -57,6 +57,35 @@ function makeRisk(partial = {}) {
     },
     coverages: { ...(partial.coverages || {}) },
     mitigation: { ...(partial.mitigation || {}) },
+
+    // ---------------------------------------------------------------------
+    // Optional blocks, added after validating this contract against a live
+    // FL carrier's production HO3 schema (123 fields). The core above covers
+    // the rating spine; these carry what real carriers additionally rate on.
+    // All optional - validation does not require them - but adapters need
+    // somewhere canonical to map them FROM, or every carrier grows bespoke
+    // risk fields and the "one canonical shape" promise quietly dies.
+    // ---------------------------------------------------------------------
+
+    // Endorsements / optional coverages, keyed by a neutral code with a
+    // boolean or limit value. e.g. { waterDamage: true, animalLiability: 300000,
+    // ordinanceOrLaw: '25%', equipmentBreakdown: true, sinkhole: false }
+    endorsements: { ...(partial.endorsements || {}) },
+
+    // Scheduled personal property: [{ class: 'JEWELRY', value: 15000 }, ...]
+    scheduledProperty: [...(partial.scheduledProperty || [])],
+
+    // Prior carrier and companion policies - FL carriers rate and gate on both.
+    // priorInsurance: { carrier, policyNumber, expirationDate, yearsWithPrior }
+    priorInsurance: { ...(partial.priorInsurance || {}) },
+    // companionPolicies: [{ type: 'FLOOD', carrier, policyNumber }, ...]
+    companionPolicies: [...(partial.companionPolicies || [])],
+
+    // Protective devices and discount-bearing features.
+    // e.g. { burglarAlarm: 'CENTRAL', fireAlarm: 'CENTRAL', securedCommunity: true,
+    //        sprinklers: false, waterLeakDetection: true }
+    features: { ...(partial.features || {}) },
+
     creditConsent: partial.creditConsent ?? false,
   };
 }
