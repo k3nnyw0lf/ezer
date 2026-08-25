@@ -123,10 +123,24 @@ Every hook also accepts a function, so a genuinely strange carrier never forces 
 
 ## Any kind of insurance
 
-`product.lineOfBusiness` selects a line definition: **HO, FLOOD, AUTO, COMMERCIAL, TRAVEL** ship
-built in, each declaring its own required fields and risk blocks (`flood`, `vehicles`/`drivers`,
-`business`, `trip`/`travelers`). The response shape — `status`, `messages`, `premium`, `coverages` —
-is deliberately identical across every line, so comparison and ranking code never changes.
+`product.lineOfBusiness` selects a line definition. Eleven kinds of insurance ship built in:
+
+**HO** (incl. manufactured home MHO3/MDP1) · **FLOOD** · **AUTO** · **COMMERCIAL** · **TRAVEL** ·
+**HEALTH** (ACA / Medicare / STM / dental / vision) · **LIFE** (term / whole / final expense) ·
+**SURETY** (license & permit / contract / court / fidelity bonds) · **UMBRELLA** ·
+**RECREATIONAL** (boat / PWC / motorcycle / RV / golf cart / ATV) · **HOME_WARRANTY**
+
+Each declares its own required fields and risk blocks (`flood`, `vehicles`/`drivers`, `business`,
+`members`/`household`, `life`, `bond`, `underlying`/`umbrella`, `units`/`operators`, `warranty`).
+The response shape — `status`, `messages`, `premium`, `coverages` — is deliberately identical across
+every line, so comparison and ranking code never changes.
+
+The HEALTH and LIFE definitions were drafted and then **adversarially reviewed before landing**;
+the reviews rejected the first drafts and the published versions carry the fixes — for example,
+LIFE's term length is any multiple of 12 months rather than a closed enum (35- and 40-year terms
+are mainstream), UL/IUL are excluded until a single canonical premium semantics exists, and a
+HEALTH request without a `planId` obliges the engine to return its lowest-premium qualifying plan
+and say so in `messages`, so two implementations can never return incomparable numbers.
 
 Adding a kind of insurance is a declaration, not a fork:
 

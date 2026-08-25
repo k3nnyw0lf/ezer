@@ -236,6 +236,200 @@ async function lineTests() {
     assert.deepStrictEqual(validateRisk(r), []);
   });
 
+  await test('MH rides the HO line: MHO3 + MANUFACTURED construction validates', () => {
+    const r = goodRisk();
+    r.product.formType = 'MHO3';
+    r.property.constructionType = 'MANUFACTURED';
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('HEALTH ACA validates with members, tobacco and the household subsidy switch', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'HEALTH', formType: 'ACA', effectiveDate: '2026-11-01' },
+      applicant: { lastName: 'Primary' },
+      location: { zip: '34102', countyFips: '12021' },
+      members: [
+        { relationship: 'PRIMARY', dateOfBirth: '1986-11-16', tobaccoUse: false },
+        { relationship: 'DEPENDENT', dateOfBirth: '2015-03-02', tobaccoUse: false, label: 'child 1' },
+      ],
+      household: { income: 65000, size: 3 },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('HEALTH rejects two spouses and a MEDIGAP quote without a plan letter', () => {
+    const base = {
+      product: { lineOfBusiness: 'HEALTH', formType: 'ACA', effectiveDate: '2026-11-01' },
+      applicant: { lastName: 'X' }, location: { zip: '34102' },
+      members: [
+        { relationship: 'PRIMARY', dateOfBirth: '1980-01-01', tobaccoUse: false },
+        { relationship: 'SPOUSE', dateOfBirth: '1981-01-01', tobaccoUse: false },
+        { relationship: 'SPOUSE', dateOfBirth: '1982-01-01', tobaccoUse: false },
+      ],
+    };
+    assert.ok(validateRisk(makeRisk(base)).some((p) => p.includes('at most one SPOUSE')));
+    const medigap = makeRisk({
+      product: { lineOfBusiness: 'HEALTH', formType: 'MEDIGAP', effectiveDate: '2026-11-01' },
+      applicant: { lastName: 'X' }, location: { zip: '34102' },
+      members: [{ relationship: 'PRIMARY', dateOfBirth: '1958-01-01' }],
+    });
+    assert.ok(validateRisk(medigap).some((p) => p.includes('planLetter')));
+  });
+
+  await test('HEALTH Medicare products rate one life only', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'HEALTH', formType: 'MEDICARE_ADVANTAGE', effectiveDate: '2026-11-01' },
+      applicant: { lastName: 'X' }, location: { zip: '34102' },
+      members: [
+        { relationship: 'PRIMARY', dateOfBirth: '1958-01-01' },
+        { relationship: 'SPOUSE', dateOfBirth: '1959-01-01' },
+      ],
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('exactly one entry')));
+  });
+
+  await test('LIFE accepts a 35-year term (multiple of 12, not a closed enum)', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'LIFE', formType: 'TERM', effectiveDate: '2026-10-01', termMonths: 420 },
+      applicant: { lastName: 'Insured', dateOfBirth: '1986-11-16' },
+      coverages: { faceAmount: 500000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'FL' },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('LIFE: the tobacco date is authoritative over the boolean', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'LIFE', formType: 'WHOLE', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Insured', dateOfBirth: '1970-01-01' },
+      coverages: { faceAmount: 25000 },
+      life: { sex: 'FEMALE', tobaccoUse: true, tobaccoLastUseDate: '2020-01-01', state: 'FL' },
+    });
+    assert.ok(validateRisk(r).some((p) => p.includes('tobaccoUse must be false')));
+  });
+
+  await test('LIFE rejects UL (cut from v1 until premium semantics are settled) and lone height', () => {
+    const ul = makeRisk({
+      product: { lineOfBusiness: 'LIFE', formType: 'UL', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'X', dateOfBirth: '1980-01-01' },
+      coverages: { faceAmount: 100000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'FL' },
+    });
+    assert.ok(validateRisk(ul).some((p) => p.includes('formType')));
+    const lonely = makeRisk({
+      product: { lineOfBusiness: 'LIFE', formType: 'TERM', effectiveDate: '2026-10-01', termMonths: 240 },
+      applicant: { lastName: 'X', dateOfBirth: '1980-01-01' },
+      coverages: { faceAmount: 100000 },
+      life: { sex: 'MALE', tobaccoUse: false, state: 'FL', heightInches: 70 },
+    });
+    assert.ok(validateRisk(lonely).some((p) => p.includes('given together')));
+  });
+
+  await test('SURETY license bond validates on ~six fields (the fast path)', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'SURETY', formType: 'LICENSE_PERMIT', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Principal' },
+      bond: { bondType: 'contractorLicense', bondAmount: 15000, state: 'FL' },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('SURETY: performance bonds need contract details; credit consent needs the owner', () => {
+    const perf = makeRisk({
+      product: { lineOfBusiness: 'SURETY', formType: 'PERFORMANCE', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Builders LLC' },
+      bond: { bondType: 'performance', bondAmount: 500000, state: 'FL' },
+    });
+    const p1 = validateRisk(perf);
+    assert.ok(p1.some((m) => m.includes('contractAmount')));
+    assert.ok(p1.some((m) => m.includes('obligee')));
+    const credit = makeRisk({
+      product: { lineOfBusiness: 'SURETY', formType: 'LICENSE_PERMIT', effectiveDate: '2026-10-01' },
+      business: { name: 'Example Builders LLC' },
+      bond: { bondType: 'contractorLicense', bondAmount: 15000, state: 'FL' },
+      creditConsent: true,
+    });
+    assert.ok(validateRisk(credit).some((m) => m.includes('principalAddress')));
+  });
+
+  await test('UMBRELLA accepts a $3M limit (any multiple of 1M) over auto + home', () => {
+    const r = makeRisk({
+      product: { lineOfBusiness: 'UMBRELLA', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Insured', dateOfBirth: '1986-11-16' },
+      coverages: { limit: 3_000_000 },
+      underlying: [
+        { type: 'AUTO', liability: { perPerson: 250000, perOccurrence: 500000 } },
+        { type: 'HOME', liability: { perOccurrence: 300000 } },
+      ],
+      umbrella: { riskState: 'FL', driverCount: 2, driversUnder25: 0, vehicleCount: 2, rentalPropertyCount: 0, incidentCount: 0 },
+    });
+    assert.deepStrictEqual(validateRisk(r), []);
+  });
+
+  await test('UMBRELLA: no primary underlying, and LANDLORD without rental count, are rejected', () => {
+    const noPrimary = makeRisk({
+      product: { lineOfBusiness: 'UMBRELLA', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'X', dateOfBirth: '1980-01-01' },
+      coverages: { limit: 1_000_000 },
+      underlying: [{ type: 'WATERCRAFT', liability: { perOccurrence: 300000 } }],
+      umbrella: { riskState: 'FL', driverCount: 0, driversUnder25: 0, vehicleCount: 0, rentalPropertyCount: 0, incidentCount: 0 },
+    });
+    assert.ok(validateRisk(noPrimary).some((p) => p.includes('AUTO, HOME, CONDO or RENTERS')));
+    const landlord = makeRisk({
+      product: { lineOfBusiness: 'UMBRELLA', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'X', dateOfBirth: '1980-01-01' },
+      coverages: { limit: 1_000_000 },
+      underlying: [
+        { type: 'HOME', liability: { perOccurrence: 300000 } },
+        { type: 'LANDLORD', liability: { perOccurrence: 300000 } },
+      ],
+      umbrella: { riskState: 'FL', driverCount: 0, driversUnder25: 0, vehicleCount: 0, rentalPropertyCount: 0, incidentCount: 0 },
+    });
+    assert.ok(validateRisk(landlord).some((p) => p.includes('rentalPropertyCount >= 1')));
+  });
+
+  await test('RECREATIONAL: a pure sailboat needs no horsepower; a cart with a motorcycle block fails', () => {
+    const sail = makeRisk({
+      product: { lineOfBusiness: 'RECREATIONAL', formType: 'BOAT', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Skipper', dateOfBirth: '1975-06-01' },
+      units: [{
+        unitType: 'BOAT', year: 2018, make: 'Catalina', model: '315', garagingZip: '34102', value: 90000,
+        boat: { lengthFeet: 31, engineType: 'SAIL_AUX', mooring: { type: 'WET_SLIP', marinaZip: '34102' } },
+      }],
+    });
+    assert.deepStrictEqual(validateRisk(sail), []);
+    const cart = makeRisk({
+      product: { lineOfBusiness: 'RECREATIONAL', formType: 'GOLF_CART', effectiveDate: '2026-10-01' },
+      applicant: { lastName: 'Owner', dateOfBirth: '1960-01-01' },
+      coverages: { liability: { combinedSingleLimit: 300000 } },
+      units: [{
+        unitType: 'GOLF_CART', year: 2023, make: 'Club Car', model: 'Onward', garagingZip: '34109',
+        motorcycle: { engineCc: 600 },
+      }],
+    });
+    assert.ok(validateRisk(cart).some((p) => p.includes('does not belong on a GOLF_CART')));
+  });
+
+  await test('HOME_WARRANTY validates minimal DIRECT; CONDO cannot buy roofLeak', () => {
+    const eff = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const ok = makeRisk({
+      product: { lineOfBusiness: 'HOME_WARRANTY', effectiveDate: eff },
+      applicant: { lastName: 'Owner' },
+      property: { address: { state: 'FL', postalCode: '34109' }, dwellingType: 'SFR' },
+      warranty: { transactionType: 'DIRECT', planTier: 'ENHANCED' },
+      endorsements: { poolSpa: true },
+    });
+    assert.deepStrictEqual(validateRisk(ok), []);
+    const condo = makeRisk({
+      product: { lineOfBusiness: 'HOME_WARRANTY', effectiveDate: eff },
+      applicant: { lastName: 'Owner' },
+      property: { address: { state: 'FL', postalCode: '34109' }, dwellingType: 'CONDO' },
+      warranty: { transactionType: 'REAL_ESTATE' },
+      endorsements: { roofLeak: true },
+    });
+    assert.ok(validateRisk(condo).some((p) => p.includes('roofLeak')));
+  });
+
   await test('an unregistered line is rejected with the list of known lines', () => {
     const r = makeRisk({ product: { effectiveDate: '2026-10-01' }, applicant: { lastName: 'X' } });
     r.product.lineOfBusiness = 'PET';

@@ -237,7 +237,9 @@ components:
             lineOfBusiness:
               type: string
               description: |
-                Line discriminator. Built-in lines: HO, FLOOD, AUTO, COMMERCIAL, TRAVEL.
+                Line discriminator. Built-in lines: HO (incl. manufactured-home forms MHO3/MDP1),
+                FLOOD, AUTO, COMMERCIAL, TRAVEL, HEALTH, LIFE, SURETY, UMBRELLA, RECREATIONAL,
+                HOME_WARRANTY.
                 Each line changes which request blocks are required (see the client's
                 contract.js line registry); the RESPONSE shape is identical for every line.
               example: HO
@@ -309,6 +311,46 @@ components:
           type: array
           description: "TRAVEL line: [{ dateOfBirth | age }]."
           items: { type: object, additionalProperties: true }
+        location:
+          type: object
+          description: "HEALTH line: zip (required), countyFips (optional - engines refuse ambiguous ZIPs via messages), state."
+          additionalProperties: true
+        members:
+          type: array
+          description: "HEALTH line: the rated lives - [{ relationship: PRIMARY|SPOUSE|DEPENDENT, dateOfBirth, tobaccoUse, gender, label }]. Exactly one PRIMARY, at most one SPOUSE; Medicare products take exactly one member. Identified by relationship + DOB, never by name."
+          items: { type: object, additionalProperties: true }
+        household:
+          type: object
+          description: "HEALTH/ACA subsidy switch: { income, size } all-or-nothing. Present = subsidy-estimated quote, absent = full price. coverages.planId (HIOS/CMS id) pins one plan; without it engines return their lowest-premium qualifying plan and say so in messages."
+          additionalProperties: true
+        life:
+          type: object
+          description: "LIFE line: sex, tobaccoUse, tobaccoLastUseDate (authoritative over the boolean), state, healthClass, heightInches+weightPounds (together). formTypes TERM|WHOLE|FINAL_EXPENSE; term is any positive multiple of 12 months."
+          additionalProperties: true
+        bond:
+          type: object
+          description: "SURETY line: bondType (open registry slug), bondAmount (penal sum), state (filing jurisdiction), obligee { name, type }, contractAmount, projectDescription, bidBondPercent, employeeCount, principalAddress (owner's home address, required with creditConsent)."
+          additionalProperties: true
+        underlying:
+          type: array
+          description: "UMBRELLA line: [{ type: AUTO|HOME|CONDO|RENTERS|LANDLORD|WATERCRAFT|MOTORCYCLE|RV, liability { perPerson, perOccurrence, combinedSingleLimit }, unitCount, carrier, expirationDate }]. At least one AUTO/HOME/CONDO/RENTERS anchor."
+          items: { type: object, additionalProperties: true }
+        umbrella:
+          type: object
+          description: "UMBRELLA line: riskState, driverCount, driversUnder25, vehicleCount, rentalPropertyCount, incidentCount (explicit zeros), watercraft[]. coverages.limit is any positive multiple of 1000000."
+          additionalProperties: true
+        units:
+          type: array
+          description: "RECREATIONAL line: [{ unitType: BOAT|PWC|MOTORCYCLE|RV|GOLF_CART|ATV, year, make, model, garagingZip, value, plus a matching sub-block (boat/motorcycle/rv/golfCart/atv) }]. Sub-block must agree with unitType; pure sail exempt from speed/power."
+          items: { type: object, additionalProperties: true }
+        operators:
+          type: array
+          description: "RECREATIONAL line: complete operator roster when present; omitted = applicant is sole operator."
+          items: { type: object, additionalProperties: true }
+        warranty:
+          type: object
+          description: "HOME_WARRANTY line: transactionType REAL_ESTATE|DIRECT (required), planTier BASIC|ENHANCED|PREMIUM (omit for lowest-priced qualifying tier, stated in messages), squareFootageBand. Add-ons ride the universal endorsements block."
+          additionalProperties: true
         endorsements:
           type: object
           description: "Optional coverages keyed by neutral code, boolean or limit value. Universal, optional."

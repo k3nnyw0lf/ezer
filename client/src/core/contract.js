@@ -15,8 +15,10 @@
 const STATUSES = ['quoted', 'referred', 'declined'];
 
 // Kept for backward compatibility with existing HO callers and adapters.
-const FORM_TYPES = ['HO3', 'HO4', 'HO6', 'DP1', 'DP3'];
-const CONSTRUCTION = ['FRAME', 'MASONRY', 'MASONRY_VENEER', 'SUPERIOR'];
+// MHO3/MDP1 are the manufactured-home forms (Citizens vocabulary) - MH rides on
+// the HO line rather than being its own, since the risk shape is identical.
+const FORM_TYPES = ['HO3', 'HO4', 'HO6', 'DP1', 'DP3', 'MHO3', 'MDP1'];
+const CONSTRUCTION = ['FRAME', 'MASONRY', 'MASONRY_VENEER', 'SUPERIOR', 'MANUFACTURED'];
 
 // --------------------------------------------------------------------------
 // helpers
@@ -200,6 +202,492 @@ registerLine('TRAVEL', {
     // { startDate, endDate, destinationCountry, tripCost, initialDepositDate }
     trip: { ...(p.trip || {}) },
     travelers: [...(p.travelers || [])],
+  }),
+});
+
+// ---- Health (ACA / Medicare / STM / dental / vision) ---------------------
+// Designed against the author's LIVE HealthSherpa integration, then adversarially
+// reviewed. Two review findings shaped it: (1) a health request can match many
+// filed plans, so coverages.planId (HIOS/CMS contract-plan id) optionally pins ONE;
+// absent planId, engines MUST return their lowest-premium qualifying plan and say
+// so in messages - otherwise two implementations return incomparable numbers.
+// (2) county FIPS is how both ACA and Medicare actually rate, but requiring it
+// taxes every adopter with a ZIP-to-FIPS lookup; it is optional, and engines
+// refuse ambiguous ZIPs with a message rather than a schema error.
+const HEALTH_FORMS = ['ACA', 'MEDICARE_ADVANTAGE', 'MEDIGAP', 'PDP', 'STM', 'DENTAL', 'VISION'];
+const MEDICARE_FORMS = ['MEDICARE_ADVANTAGE', 'MEDIGAP', 'PDP'];
+const FIRST_OF_MONTH_FORMS = ['ACA', 'MEDICARE_ADVANTAGE', 'PDP'];
+
+registerLine('HEALTH', {
+  label: 'Health',
+  formTypes: HEALTH_FORMS,
+  required: [
+    ['location.zip', IS_ZIP, 'must be a US ZIP'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || '').toUpperCase();
+    const members = risk.members || [];
+
+    if (!members.length) problems.push('members must contain at least one entry');
+    members.forEach((m, i) => {
+      if (!['PRIMARY', 'SPOUSE', 'DEPENDENT'].includes(m.relationship)) {
+        problems.push(`members.${i}.relationship must be PRIMARY, SPOUSE or DEPENDENT`);
+      }
+      if (!IS_DATE(m.dateOfBirth) || new Date(m.dateOfBirth) >= new Date()) {
+        problems.push(`members.${i}.dateOfBirth must be YYYY-MM-DD in the past`);
+      }
+      if (m.tobaccoUse !== undefined && typeof m.tobaccoUse !== 'boolean') {
+        problems.push(`members.${i}.tobaccoUse must be a boolean`);
+      }
+      if ((ft === 'ACA' || ft === 'STM') && typeof m.tobaccoUse !== 'boolean') {
+        problems.push(`members.${i}.tobaccoUse is required for ${ft}`);
+      }
+      if (m.gender !== undefined && !['MALE', 'FEMALE', 'UNSPECIFIED'].includes(m.gender)) {
+        problems.push(`members.${i}.gender must be MALE, FEMALE or UNSPECIFIED`);
+      }
+      if (m.label !== undefined && String(m.label).length > 40) {
+        problems.push(`members.${i}.label must be 40 chars or fewer (display-only, never an identity)`);
+      }
+    });
+    if (members.filter((m) => m.relationship === 'PRIMARY').length !== 1) {
+      problems.push('members must contain exactly one PRIMARY');
+    }
+    if (members.filter((m) => m.relationship === 'SPOUSE').length > 1) {
+      problems.push('members must contain at most one SPOUSE');
+    }
+    if (MEDICARE_FORMS.includes(ft) && members.length !== 1) {
+      problems.push(`${ft} rates one life - members must contain exactly one entry`);
+    }
+
+    if (present(get(risk, 'location.countyFips')) && !/^\d{5}$/.test(String(get(risk, 'location.countyFips')))) {
+      problems.push('location.countyFips must be a 5-digit county FIPS code');
+    }
+
+    const hh = risk.household;
+    if (hh && Object.keys(hh).length) {
+      if (ft !== 'ACA') problems.push('household (subsidy inputs) is only valid for ACA');
+      if (!IS_POSITIVE(hh.income)) problems.push('household.income is required when household is present');
+      if (!(Number.isInteger(hh.size) && hh.size >= 1)) problems.push('household.size is required when household is present');
+      if (Number.isInteger(hh.size) && hh.size < members.length) {
+        problems.push('household.size must be >= the number of members');
+      }
+    }
+
+    if (ft === 'MEDIGAP' && !present(get(risk, 'coverages.planLetter'))) {
+      problems.push('coverages.planLetter is required for MEDIGAP');
+    }
+    if (ft !== 'MEDIGAP' && present(get(risk, 'coverages.planLetter'))) {
+      problems.push('coverages.planLetter is only valid for MEDIGAP');
+    }
+    if (ft !== 'ACA' && present(get(risk, 'coverages.metalTier'))) {
+      problems.push('coverages.metalTier is only valid for ACA');
+    }
+
+    if (ft === 'STM') {
+      const tm = get(risk, 'product.termMonths');
+      if (!(Number.isInteger(tm) && tm >= 1 && tm <= 12)) {
+        problems.push('product.termMonths (1-12) is required for STM');
+      }
+    }
+    const eff = get(risk, 'product.effectiveDate');
+    if (FIRST_OF_MONTH_FORMS.includes(ft) && IS_DATE(eff) && !/-01$/.test(eff)) {
+      problems.push(`product.effectiveDate must be the first of a month for ${ft}`);
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    // Health rates by county, not street address - no property block.
+    location: { ...(p.location || {}) },
+    // The rated lives. Identified by relationship + DOB + optional display label,
+    // never by name - dependent names are not needed to price a plan.
+    members: [...(p.members || [])],
+    // ACA subsidy switch: present = subsidy-estimated quote, absent = full price.
+    household: { ...(p.household || {}) },
+  }),
+});
+
+// ---- Life (term / whole / final expense) ---------------------------------
+// Adversarially reviewed. UL/IUL are deliberately CUT from v1: "target or minimum
+// premium, engine's choice" makes cross-carrier comparison meaningless, and the
+// shared response schema has no field to say which basis was used. They return
+// when a single canonical premium semantics is settled.
+registerLine('LIFE', {
+  label: 'Life',
+  formTypes: ['TERM', 'WHOLE', 'FINAL_EXPENSE'],
+  required: [
+    ['applicant.dateOfBirth', IS_DATE, 'must be YYYY-MM-DD'],
+    ['coverages.faceAmount', (v) => Number.isInteger(v) && v >= 1000, 'must be a whole-dollar integer >= 1000'],
+    ['life.sex', (v) => ['MALE', 'FEMALE'].includes(v), 'must be MALE or FEMALE (as rated by mortality tables; unisex states handled engine-side)'],
+    ['life.tobaccoUse', (v) => typeof v === 'boolean', 'must be a boolean'],
+    ['life.state', IS_STATE, 'must be a 2-letter state code'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || '').toUpperCase();
+    const eff = get(risk, 'product.effectiveDate');
+    const dob = get(risk, 'applicant.dateOfBirth');
+
+    if (IS_DATE(dob) && IS_DATE(eff) && new Date(dob) >= new Date(eff)) {
+      problems.push('applicant.dateOfBirth must precede product.effectiveDate');
+    }
+
+    // Term length: any positive multiple of 12 - NOT a closed enum. 35- and
+    // 40-year terms are mainstream since ~2021; "term not offered" is a carrier
+    // decline message, never a schema error. Common bands: 120/180/240/300/360.
+    if (ft === 'TERM') {
+      const tm = get(risk, 'product.termMonths');
+      if (!(Number.isInteger(tm) && tm > 0 && tm % 12 === 0)) {
+        problems.push('product.termMonths is required for TERM and must be a positive multiple of 12');
+      }
+    }
+    // termMonths sent on WHOLE/FINAL_EXPENSE is ignored (permanent coverage), not an error.
+
+    const life = risk.life || {};
+
+    // Tobacco: the DATE is authoritative over the boolean. Within 12 months of
+    // the effective date <=> tobaccoUse must be true; older than 12 months, the
+    // boolean must be false (former-user banding is the engine's job).
+    if (present(life.tobaccoLastUseDate)) {
+      if (!IS_DATE(life.tobaccoLastUseDate)) {
+        problems.push('life.tobaccoLastUseDate must be YYYY-MM-DD');
+      } else if (IS_DATE(eff)) {
+        const last = new Date(life.tobaccoLastUseDate);
+        const effD = new Date(eff);
+        if (last > effD) problems.push('life.tobaccoLastUseDate cannot be after product.effectiveDate');
+        else {
+          const within12mo = (effD - last) <= 366 * 24 * 3600 * 1000;
+          if (within12mo && life.tobaccoUse !== true) {
+            problems.push('life.tobaccoUse must be true when tobaccoLastUseDate is within 12 months of the effective date');
+          }
+          if (!within12mo && life.tobaccoUse === true) {
+            problems.push('life.tobaccoUse must be false when tobaccoLastUseDate is more than 12 months before the effective date');
+          }
+        }
+      }
+    }
+
+    // Build: both-or-neither, with sanity bounds. Build wins over healthClass.
+    const hasH = present(life.heightInches);
+    const hasW = present(life.weightPounds);
+    if (hasH !== hasW) problems.push('life.heightInches and life.weightPounds must be given together');
+    if (hasH && !(Number(life.heightInches) >= 12 && Number(life.heightInches) <= 96)) {
+      problems.push('life.heightInches must be between 12 and 96');
+    }
+    if (hasW && !(Number(life.weightPounds) >= 30 && Number(life.weightPounds) <= 1200)) {
+      problems.push('life.weightPounds must be between 30 and 1200');
+    }
+    if (present(life.healthClass) && !['PREFERRED_PLUS', 'PREFERRED', 'STANDARD_PLUS', 'STANDARD', 'SUBSTANDARD'].includes(life.healthClass)) {
+      problems.push('life.healthClass must be PREFERRED_PLUS, PREFERRED, STANDARD_PLUS, STANDARD or SUBSTANDARD');
+    }
+
+    // Riders live in the universal endorsements block, keyed camelCase.
+    if (present(get(risk, 'endorsements.returnOfPremium')) && ft !== 'TERM') {
+      problems.push('endorsements.returnOfPremium is only valid for TERM');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    // sex, tobaccoUse, tobaccoLastUseDate, state, healthClass, heightInches,
+    // weightPounds. No beneficiary identity, no SSN, no medical records - a
+    // quote needs none of them.
+    life: { ...(p.life || {}) },
+  }),
+});
+
+// ---- Surety (bonds - license/permit, contract, court, fidelity) ----------
+// Adversarially reviewed. The reviewer's key correction: a surety soft credit
+// pull runs on the OWNER'S personal identity, so creditConsent=true demands the
+// indemnitor's personal address + DOB even when the principal is an entity.
+// bondType is an open registry slug (thousands of forms are filed per state);
+// engines reject slugs unknown for the state, the contract does not freeze them.
+registerLine('SURETY', {
+  label: 'Surety',
+  formTypes: ['LICENSE_PERMIT', 'BID', 'PERFORMANCE', 'PAYMENT', 'COURT', 'FIDELITY'],
+  required: [
+    ['bond.bondType', undefined, 'is required (registry slug, e.g. contractorLicense, notaryPublic, appeal)'],
+    ['bond.state', IS_STATE, 'must be a 2-letter state code (filing jurisdiction)'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || '').toUpperCase();
+    const bond = risk.bond || {};
+
+    // Penal sum: required, except BID may derive it from percent x contract.
+    const hasAmount = IS_POSITIVE(bond.bondAmount);
+    const bidDerivable = ft === 'BID' && IS_POSITIVE(bond.contractAmount)
+      && Number(bond.bidBondPercent) > 0 && Number(bond.bidBondPercent) <= 100;
+    if (!hasAmount && !bidDerivable) {
+      problems.push('bond.bondAmount is required (BID may instead send contractAmount + bidBondPercent)');
+    }
+
+    if (['BID', 'PERFORMANCE', 'PAYMENT'].includes(ft)) {
+      if (!IS_POSITIVE(bond.contractAmount)) problems.push(`bond.contractAmount is required for ${ft}`);
+      if (!present(bond.projectDescription)) problems.push(`bond.projectDescription is required for ${ft}`);
+      if (!present(get(bond, 'obligee.name'))) problems.push(`bond.obligee.name (the project owner) is required for ${ft}`);
+    }
+    if (ft === 'COURT' && !present(get(bond, 'obligee.name'))) {
+      problems.push('bond.obligee.name (the court) is required for COURT');
+    }
+    // ERISA fidelity prices purely on penal sum - employeeCount only for the rest.
+    if (ft === 'FIDELITY' && String(bond.bondType).toLowerCase() !== 'erisa'
+      && !(Number.isInteger(bond.employeeCount) && bond.employeeCount >= 1)) {
+      problems.push('bond.employeeCount (>= 1) is required for FIDELITY (except bondType erisa)');
+    }
+
+    // Credit-tiered pricing needs the OWNER, not the storefront.
+    if (risk.creditConsent === true) {
+      if (!present(get(risk, 'applicant.dateOfBirth'))) {
+        problems.push('applicant.dateOfBirth is required when creditConsent is true (soft pull runs on the owner)');
+      }
+      if (!present(get(bond, 'principalAddress.line1')) || !IS_ZIP(get(bond, 'principalAddress.zip'))) {
+        problems.push('bond.principalAddress (line1 + zip, the owner\'s home address) is required when creditConsent is true');
+      }
+    }
+
+    // Date sanity: a project cannot finish before the bond starts.
+    const eff = get(risk, 'product.effectiveDate');
+    if (IS_DATE(bond.estimatedCompletionDate) && IS_DATE(eff)
+      && new Date(bond.estimatedCompletionDate) <= new Date(eff)) {
+      problems.push('bond.estimatedCompletionDate must be after product.effectiveDate');
+    }
+    // Fields inapplicable to a formType are ignored, never rejected - adoption-friendly.
+    return problems;
+  },
+  skeleton: (p) => ({
+    // bondType, bondAmount, state, obligee { name, type: FEDERAL|STATE|COUNTY|MUNICIPAL|COURT|PRIVATE },
+    // contractAmount, projectDescription, projectLocation, bidDate, bidBondPercent,
+    // estimatedCompletionDate, employeeCount, caseNumber, principalAddress,
+    // hasPriorSuretyLosses, workingCapital, netWorth, largestContractCompleted
+    bond: { ...(p.bond || {}) },
+    business: { ...(p.business || {}) },
+  }),
+});
+
+// ---- Personal umbrella / excess ------------------------------------------
+// Adversarially reviewed. Fixes applied: the limit is any positive multiple of
+// $1M (a closed 1/2/5M enum banned mainstream 3M and 4M policies); underlying
+// items carry unitCount so multi-bike/multi-RV schedules are countable; and the
+// "drivers but no auto policy" household (city dweller, rental cars only) is an
+// ENGINE acceptability question answered in messages, never a schema rejection.
+registerLine('UMBRELLA', {
+  label: 'Personal Umbrella / Excess',
+  formTypes: null, // PERSONAL_UMBRELLA (default) | EXCESS - defaulted, so not schema-required
+  required: [
+    ['applicant.lastName'],
+    ['applicant.dateOfBirth', IS_DATE, 'must be YYYY-MM-DD'],
+    ['coverages.limit', (v) => Number.isInteger(v) && v >= 1_000_000 && v % 1_000_000 === 0,
+      'must be a positive multiple of 1000000'],
+    ['umbrella.riskState', IS_STATE, 'must be a 2-letter state code'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || 'PERSONAL_UMBRELLA').toUpperCase();
+    if (!['PERSONAL_UMBRELLA', 'EXCESS'].includes(ft)) {
+      problems.push('product.formType must be PERSONAL_UMBRELLA or EXCESS');
+    }
+
+    const underlying = risk.underlying || [];
+    const TYPES = ['AUTO', 'HOME', 'CONDO', 'RENTERS', 'LANDLORD', 'WATERCRAFT', 'MOTORCYCLE', 'RV'];
+    if (!underlying.length) problems.push('underlying must contain at least one policy');
+    underlying.forEach((u, i) => {
+      if (!TYPES.includes(u.type)) problems.push(`underlying.${i}.type must be one of ${TYPES.join(', ')}`);
+      const liab = u.liability || {};
+      if (u.type === 'AUTO') {
+        const split = present(liab.perPerson) && present(liab.perOccurrence);
+        if (!split && !present(liab.combinedSingleLimit)) {
+          problems.push(`underlying.${i}.liability needs perPerson + perOccurrence, or combinedSingleLimit`);
+        }
+      } else if (!present(liab.perOccurrence) && !present(liab.combinedSingleLimit)) {
+        problems.push(`underlying.${i}.liability.perOccurrence is required (home Coverage E maps here)`);
+      }
+      if (u.unitCount !== undefined && !(Number.isInteger(u.unitCount) && u.unitCount >= 1)) {
+        problems.push(`underlying.${i}.unitCount must be an integer >= 1 (units scheduled on that policy)`);
+      }
+    });
+    // The anchor rule: an umbrella sits on a primary auto or residence policy.
+    if (underlying.length && !underlying.some((u) => ['AUTO', 'HOME', 'CONDO', 'RENTERS'].includes(u.type))) {
+      problems.push('underlying must include at least one AUTO, HOME, CONDO or RENTERS policy');
+    }
+
+    const um = risk.umbrella || {};
+    for (const k of ['driverCount', 'driversUnder25', 'vehicleCount', 'rentalPropertyCount', 'incidentCount']) {
+      if (!(Number.isInteger(um[k]) && um[k] >= 0)) problems.push(`umbrella.${k} must be an integer >= 0 (explicit zero)`);
+    }
+    if (Number.isInteger(um.driversUnder25) && Number.isInteger(um.driverCount) && um.driversUnder25 > um.driverCount) {
+      problems.push('umbrella.driversUnder25 cannot exceed umbrella.driverCount');
+    }
+    if (Number(um.rentalPropertyCount) > 0 && !underlying.some((u) => ['LANDLORD', 'HOME'].includes(u.type))) {
+      problems.push('rental properties declared without an underlying LANDLORD or HOME policy');
+    }
+    if (underlying.some((u) => u.type === 'LANDLORD') && Number(um.rentalPropertyCount) === 0) {
+      problems.push('an underlying LANDLORD policy requires umbrella.rentalPropertyCount >= 1');
+    }
+    if (present(get(risk, 'coverages.selfInsuredRetention')) && ft === 'EXCESS') {
+      problems.push('coverages.selfInsuredRetention is only valid for PERSONAL_UMBRELLA (EXCESS is follow-form)');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    // [{ type, carrier, policyNumber, expirationDate, unitCount, liability: { perPerson, perOccurrence, combinedSingleLimit, propertyDamage } }]
+    underlying: [...(p.underlying || [])],
+    // riskState, riskZip, driverCount, driversUnder25, vehicleCount,
+    // rentalPropertyCount, incidentCount, watercraft[]. Senior-driver inputs are
+    // carrier-specific; adapters may map umbrella.driversOver70 when a carrier asks.
+    umbrella: { ...(p.umbrella || {}) },
+  }),
+});
+
+// ---- Recreational (boat / PWC / motorcycle / RV / golf cart / ATV) -------
+// Approved by adversarial review; its improvements are implemented: the
+// sub-block must match unitType, pure sailboats (engineType SAIL_AUX/NONE) are
+// exempt from the speed/power requirement, and CSL is mutually exclusive with
+// split liability limits.
+registerLine('RECREATIONAL', {
+  label: 'Recreational',
+  formTypes: ['BOAT', 'PWC', 'MOTORCYCLE', 'RV', 'GOLF_CART', 'ATV'],
+  required: [
+    ['applicant.lastName'],
+    ['applicant.dateOfBirth', IS_DATE, 'must be YYYY-MM-DD (operator-age rating when operators[] is omitted)'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const ft = String(get(risk, 'product.formType') || '').toUpperCase();
+    const units = risk.units || [];
+    const UNIT_TYPES = ['BOAT', 'PWC', 'MOTORCYCLE', 'RV', 'GOLF_CART', 'ATV'];
+    const SUB_BLOCKS = { BOAT: 'boat', PWC: 'boat', MOTORCYCLE: 'motorcycle', RV: 'rv', GOLF_CART: 'golfCart', ATV: 'atv' };
+
+    if (!units.length) problems.push('units must contain at least one unit');
+    units.forEach((u, i) => {
+      if (!UNIT_TYPES.includes(u.unitType)) problems.push(`units.${i}.unitType must be one of ${UNIT_TYPES.join(', ')}`);
+      if (!IS_YEAR(u.year) || Number(u.year) < 1950) problems.push(`units.${i}.year must be 1950..current+1`);
+      if (!present(u.make)) problems.push(`units.${i}.make is required`);
+      if (!present(u.model)) problems.push(`units.${i}.model is required`);
+      if (!IS_ZIP(u.garagingZip)) problems.push(`units.${i}.garagingZip must be a US ZIP`);
+
+      // The sub-block must agree with unitType - a GOLF_CART carrying a
+      // motorcycle{} block is nonsense that must not validate.
+      const expected = SUB_BLOCKS[u.unitType];
+      for (const blockName of ['boat', 'motorcycle', 'rv', 'golfCart', 'atv']) {
+        if (blockName !== expected && u[blockName] && Object.keys(u[blockName]).length) {
+          problems.push(`units.${i}.${blockName} does not belong on a ${u.unitType}`);
+        }
+      }
+
+      if (u.unitType === 'BOAT') {
+        if (!IS_POSITIVE(get(u, 'boat.lengthFeet'))) problems.push(`units.${i}.boat.lengthFeet is required for BOAT`);
+        if (!present(get(u, 'boat.mooring.type'))) problems.push(`units.${i}.boat.mooring.type is required for BOAT (trailer vs wet-slip is the FL windstorm fork)`);
+      }
+      if (u.unitType === 'BOAT' || u.unitType === 'PWC') {
+        const sail = ['SAIL_AUX', 'NONE'].includes(get(u, 'boat.engineType'));
+        if (!sail && !present(get(u, 'boat.maxSpeedMph')) && !present(get(u, 'boat.horsepower'))) {
+          problems.push(`units.${i}.boat needs maxSpeedMph or horsepower (pure sail exempt via engineType SAIL_AUX/NONE)`);
+        }
+      }
+      if (u.unitType === 'RV') {
+        if (!present(get(u, 'rv.rvClass'))) problems.push(`units.${i}.rv.rvClass is required for RV`);
+        if (typeof get(u, 'rv.isFullTimeResidence') !== 'boolean') {
+          problems.push(`units.${i}.rv.isFullTimeResidence must be an explicit boolean (full-timer status changes the liability form)`);
+        }
+      }
+      if ((present(u.deductible) || present(u.valuationMethod)) && !present(u.value)) {
+        problems.push(`units.${i}: deductible/valuationMethod qualify a physical-damage value that is absent`);
+      }
+    });
+
+    if (units.length && !units.some((u) => u.unitType === ft)) {
+      problems.push(`at least one unit must match product.formType (${ft}); companion units of other types may ride along`);
+    }
+
+    // Priceable: liability coverage, or every unit carries a physical-damage value.
+    const liab = get(risk, 'coverages.liability');
+    if (!liab && units.length && !units.every((u) => IS_POSITIVE(u.value))) {
+      problems.push('coverages.liability is required, or every unit must carry a value (physical-damage-only)');
+    }
+    if (liab && present(liab.combinedSingleLimit)
+      && (present(liab.bodilyInjuryPerPerson) || present(liab.bodilyInjuryPerAccident) || present(liab.propertyDamage))) {
+      problems.push('coverages.liability: combinedSingleLimit is mutually exclusive with split limits');
+    }
+
+    // operators[] omitted = the applicant is the sole operator of every unit.
+    // When present, it is the COMPLETE roster (include the applicant if they operate).
+    const ops = risk.operators || [];
+    if (ops.length) {
+      ops.forEach((o, i) => {
+        if (!present(o.lastName)) problems.push(`operators.${i}.lastName is required`);
+        if (!IS_DATE(o.dateOfBirth)) problems.push(`operators.${i}.dateOfBirth must be YYYY-MM-DD`);
+      });
+      if (!ops.some((o) => o.excluded !== true)) problems.push('operators must include at least one non-excluded operator');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    // [{ unitType, year, make, model, identification { hin|vin|serialNumber }, garagingZip,
+    //    value, valuationMethod, deductible, usage,
+    //    boat { lengthFeet, hullType, maxSpeedMph, horsepower, engineType, engineCount, mooring { type, marinaZip }, navigationArea },
+    //    motorcycle { engineCc, style, antiTheftDevice, customPartsValue },
+    //    rv { rvClass, isFullTimeResidence, lengthFeet, annualMileage },
+    //    golfCart { streetLegal, communityUse, maxSpeedMph, modified },
+    //    atv { engineCc, primaryUse } }]
+    units: [...(p.units || [])],
+    // [{ firstName, lastName, dateOfBirth, relationshipToApplicant, yearsExperience,
+    //    motorcycleEndorsement, boatingSafetyCourseCompleted, accidentsLast3Years,
+    //    violationsLast3Years, excluded }]
+    operators: [...(p.operators || [])],
+  }),
+});
+
+// ---- Home warranty (service contracts, FL class 0251) --------------------
+// Adversarially reviewed. Fixes applied: add-ons live in the UNIVERSAL
+// endorsements block (no parallel addOns array); the universal insured rule is
+// NOT relaxed; effectiveDate is forward-only within a bounded window; planTier
+// is a closed enum, and when omitted the engine returns its LOWEST-priced
+// qualifying tier and must say so in messages - the same single-price semantics
+// as HEALTH's planId rule. Only state/ZIP/dwellingType rate, so street address
+// is optional at quote time.
+registerLine('HOME_WARRANTY', {
+  label: 'Home Warranty',
+  formTypes: null,
+  required: [
+    ['property.address.state', IS_STATE, 'must be a 2-letter state code'],
+    ['property.address.postalCode', IS_ZIP, 'must be a US ZIP'],
+    ['property.dwellingType', (v) => ['SFR', 'CONDO', 'TOWNHOME', 'MOBILE_HOME', 'MULTI_UNIT_2_4'].includes(v),
+      'must be SFR, CONDO, TOWNHOME, MOBILE_HOME or MULTI_UNIT_2_4'],
+    ['warranty.transactionType', (v) => ['REAL_ESTATE', 'DIRECT'].includes(v),
+      'must be REAL_ESTATE (attached to a closing) or DIRECT (pricing differs)'],
+  ],
+  validate: (risk) => {
+    const problems = [];
+    const eff = get(risk, 'product.effectiveDate');
+    if (IS_DATE(eff)) {
+      const d = new Date(eff);
+      const now = Date.now();
+      if (d.getTime() < now - 30 * 24 * 3600 * 1000) problems.push('product.effectiveDate cannot be more than 30 days in the past');
+      if (d.getTime() > now + 366 * 24 * 3600 * 1000) problems.push('product.effectiveDate cannot be more than a year out');
+    }
+    const tt = get(risk, 'warranty.transactionType');
+    const tm = get(risk, 'product.termMonths');
+    if (present(tm)) {
+      const max = tt === 'REAL_ESTATE' ? 14 : 12; // RE promotional terms run 12-14 months
+      if (!(Number.isInteger(tm) && tm >= 12 && tm <= max)) {
+        problems.push(`product.termMonths must be 12${tt === 'REAL_ESTATE' ? '-14' : ''} for ${tt || 'this'} transactions`);
+      }
+    }
+    const tier = get(risk, 'warranty.planTier');
+    if (present(tier) && !['BASIC', 'ENHANCED', 'PREMIUM'].includes(tier)) {
+      problems.push('warranty.planTier must be BASIC, ENHANCED or PREMIUM (omit it for the lowest-priced qualifying tier)');
+    }
+    // Add-ons ride the universal endorsements block: poolSpa, wellPump,
+    // secondRefrigerator, roofLeak, septicSystem... A condo does not own its roof.
+    if (get(risk, 'property.dwellingType') === 'CONDO' && present(get(risk, 'endorsements.roofLeak'))) {
+      problems.push('endorsements.roofLeak is not valid for CONDO (the roof is association property)');
+    }
+    return problems;
+  },
+  skeleton: (p) => ({
+    property: { ...(p.property || {}), address: { state: 'FL', ...((p.property || {}).address || {}) } },
+    // { transactionType, planTier, squareFootageBand }
+    warranty: { ...(p.warranty || {}) },
   }),
 });
 
